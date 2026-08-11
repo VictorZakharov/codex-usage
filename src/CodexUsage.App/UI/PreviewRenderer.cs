@@ -1,4 +1,5 @@
 using System.Drawing.Imaging;
+using System.Globalization;
 using CodexUsage.App.Settings;
 using CodexUsage.History;
 using CodexUsage.Models;
@@ -21,11 +22,11 @@ internal static class PreviewRenderer
             Directory.CreateDirectory(directory);
         }
 
-        if (args[0].Equals("--render-icon", StringComparison.OrdinalIgnoreCase))
+        if (TryReadIconPercent(args[0], out var availablePercent))
         {
             var renderPng = Path.GetExtension(outputPath).Equals(".png", StringComparison.OrdinalIgnoreCase);
             using var icon = TrayIconRenderer.Create(
-                100,
+                availablePercent,
                 ThemePalette.Resolve(ThemeMode.Dark),
                 error: false,
                 refreshing: false,
@@ -105,5 +106,22 @@ internal static class PreviewRenderer
         bitmap.Save(outputPath, ImageFormat.Png);
         form.Hide();
         return true;
+    }
+
+    private static bool TryReadIconPercent(string argument, out double availablePercent)
+    {
+        const string command = "--render-icon";
+        availablePercent = 100;
+        if (argument.Equals(command, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return argument.StartsWith(command + "=", StringComparison.OrdinalIgnoreCase)
+            && double.TryParse(
+                argument[(command.Length + 1)..],
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out availablePercent);
     }
 }

@@ -13,23 +13,19 @@ public sealed class UsageHistoryChart : Control
         AutoPopDelay = 12_000,
     };
 
-    private IReadOnlyList<UsageHistorySample> _samples = [];
+    private UsageHistorySample[] _samples = [];
     private IReadOnlyList<UsageRestoreEvent> _restoreEvents = [];
     private ThemePalette _palette = ThemePalette.Resolve(Settings.ThemeMode.System);
     private TimeSpan _range = TimeSpan.FromDays(7);
     private RectangleF _plotRectangle;
-    private string _lastToolTip = string.Empty;
+    private HoverPoint? _hoveredPoint;
 
     public UsageHistoryChart()
     {
         DoubleBuffered = true;
         SetStyle(ControlStyles.ResizeRedraw, true);
         Cursor = Cursors.Cross;
-        MouseLeave += (_, _) =>
-        {
-            _lastToolTip = string.Empty;
-            _toolTip.SetToolTip(this, null);
-        };
+        MouseLeave += (_, _) => ClearHover();
     }
 
     public void SetData(
@@ -42,6 +38,7 @@ public sealed class UsageHistoryChart : Control
         _range = range;
         _palette = palette;
         BackColor = palette.Card;
+        ClearHover();
         Invalidate();
     }
 
@@ -58,33 +55,34 @@ public sealed class UsageHistoryChart : Control
     protected override void OnMouseMove(MouseEventArgs eventArgs)
     {
         base.OnMouseMove(eventArgs);
-        if (!_plotRectangle.Contains(eventArgs.Location) || _samples.Count == 0)
+        if (!_plotRectangle.Contains(eventArgs.Location) || _samples.Length == 0)
         {
+            ClearHover();
             return;
         }
 
         var (start, end) = VisibleInterval();
-        var position = Math.Clamp(
-            (eventArgs.X - _plotRectangle.Left) / _plotRectangle.Width,
-            0f,
-            1f);
-        var target = start + TimeSpan.FromTicks((long)((end - start).Ticks * position));
-        var nearest = _samples
-            .Where(sample => sample.RecordedAt >= start && sample.RecordedAt <= end)
-            .MinBy(sample => Math.Abs((sample.RecordedAt - target).Ticks));
-        if (nearest is null)
+        var hoveredPoint = HitTestPoint(eventArgs.Location, start, end);
+        if (hoveredPoint is null)
+        {
+            ClearHover();
+            return;
+        }
+
+        if (_hoveredPoint?.Sample.RecordedAt == hoveredPoint.Sample.RecordedAt
+            && _hoveredPoint.Window == hoveredPoint.Window)
         {
             return;
         }
 
-        var toolTip = BuildToolTip(nearest);
-        if (toolTip == _lastToolTip)
-        {
-            return;
-        }
-
-        _lastToolTip = toolTip;
-        _toolTip.SetToolTip(this, toolTip);
+        _hoveredPoint = hoveredPoint;
+        _toolTip.Hide(this);
+        _toolTip.Show(
+            BuildToolTip(hoveredPoint),
+            this,
+            Point.Round(new PointF(hoveredPoint.Location.X + 10, hoveredPoint.Location.Y + 10)),
+            12_000);
+        Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs eventArgs)
@@ -135,6 +133,7 @@ public sealed class UsageHistoryChart : Control
             start,
             end);
         DrawRestoreMarkers(graphics, start, end, primaryColor, secondaryColor);
+        DrawHoveredPoint(graphics, start, end, primaryColor, secondaryColor);
 
         if (visibleSamples.Count == 1)
         {
@@ -203,13 +202,14 @@ public sealed class UsageHistoryChart : Control
         };
         using var pointBrush = new SolidBrush(color);
         var segment = new List<PointF>();
+        var showSamplePoints = samples.Count <= _plotRectangle.Width / 6f;
 
         foreach (var sample in samples)
         {
             var value = selector(sample);
             if (value is null)
             {
-                DrawSegment(graphics, pen, pointBrush, segment);
+                DrawSegment(graphics, pen, pointBrush, segment, showSamplePoints);
                 segment.Clear();
                 continue;
             }
@@ -219,7 +219,7 @@ public sealed class UsageHistoryChart : Control
                 MapY(value.Value)));
         }
 
-        DrawSegment(graphics, pen, pointBrush, segment);
+        DrawSegment(graphics, pen, pointBrush, segment, showSamplePoints);
     }
 
     private void DrawRestoreMarkers(
@@ -273,7 +273,7 @@ public sealed class UsageHistoryChart : Control
     private (DateTimeOffset Start, DateTimeOffset End) VisibleInterval()
     {
         var now = DateTimeOffset.Now;
-        var end = _samples.Count > 0 && _samples[^1].RecordedAt > now ? _samples[^1].RecordedAt : now;
+        var end = _samples.Length > 0 && _samples[^1].RecordedAt > now ? _samples[^1].RecordedAt : now;
         return (end - _range, end);
     }
 
@@ -298,32 +298,164 @@ public sealed class UsageHistoryChart : Control
             : timestamp.ToString("MMM d");
     }
 
-    private string BuildToolTip(UsageHistorySample sample)
+    private HoverPoint? HitTestPoint(Point location, DateTimeOffset start, DateTimeOffset end)
     {
-        var primary = FormatValue(sample.PrimaryAvailablePercent);
-        var weekly = FormatValue(sample.SecondaryAvailablePercent);
-        var restores = _restoreEvents
-            .Where(item => item.RecordedAt == sample.RecordedAt)
-            .Select(item => item.Window == UsageWindowKind.FiveHour ? "5-hour restored" : "Weekly restored")
-            .ToArray();
-        var suffix = restores.Length == 0 ? string.Empty : $"\n{string.Join(" · ", restores)}";
-        return $"{sample.RecordedAt.ToLocalTime():ddd, MMM d · h:mm tt}\n5-hour: {primary}\nWeekly: {weekly}{suffix}";
+        const float hitRadius = 9f;
+        var position = Math.Clamp(
+            (location.X - _plotRectangle.Left) / _plotRectangle.Width,
+            0f,
+            1f);
+        var target = start + TimeSpan.FromTicks((long)((end - start).Ticks * position));
+        var nearestIndex = FindNearestSampleIndex(target);
+        var firstIndex = Math.Max(0, nearestIndex - 512);
+        var lastIndex = Math.Min(_samples.Length - 1, nearestIndex + 512);
+        HoverPoint? closest = null;
+        var closestDistanceSquared = hitRadius * hitRadius;
+
+        for (var index = firstIndex; index <= lastIndex; index++)
+        {
+            var sample = _samples[index];
+            if (sample.RecordedAt < start || sample.RecordedAt > end)
+            {
+                continue;
+            }
+
+            var x = MapX(sample.RecordedAt, start, end);
+            if (Math.Abs(x - location.X) > hitRadius)
+            {
+                continue;
+            }
+
+            TestPoint(sample, UsageWindowKind.FiveHour, sample.PrimaryAvailablePercent, x);
+            TestPoint(sample, UsageWindowKind.Weekly, sample.SecondaryAvailablePercent, x);
+        }
+
+        return closest;
+
+        void TestPoint(
+            UsageHistorySample sample,
+            UsageWindowKind window,
+            double? availablePercent,
+            float x)
+        {
+            if (availablePercent is null)
+            {
+                return;
+            }
+
+            var point = new PointF(x, MapY(availablePercent.Value));
+            var deltaX = point.X - location.X;
+            var deltaY = point.Y - location.Y;
+            var distanceSquared = (deltaX * deltaX) + (deltaY * deltaY);
+            if (distanceSquared > closestDistanceSquared)
+            {
+                return;
+            }
+
+            closestDistanceSquared = distanceSquared;
+            closest = new HoverPoint(sample, window, availablePercent.Value, point);
+        }
     }
 
-    private static string FormatValue(double? available)
-        => available is null
-            ? "not reported"
-            : $"{available:0.#}% available · {100 - available.Value:0.#}% consumed";
+    private int FindNearestSampleIndex(DateTimeOffset target)
+    {
+        var low = 0;
+        var high = _samples.Length - 1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            if (_samples[middle].RecordedAt < target)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        if (low <= 0)
+        {
+            return 0;
+        }
+
+        if (low >= _samples.Length)
+        {
+            return _samples.Length - 1;
+        }
+
+        return target - _samples[low - 1].RecordedAt <= _samples[low].RecordedAt - target
+            ? low - 1
+            : low;
+    }
+
+    private string BuildToolTip(HoverPoint point)
+    {
+        var windowName = point.Window == UsageWindowKind.FiveHour ? "5-hour limit" : "Weekly limit";
+        var restored = _restoreEvents.Any(item =>
+            item.RecordedAt == point.Sample.RecordedAt && item.Window == point.Window);
+        var suffix = restored ? "\nAvailability restored / reset" : string.Empty;
+        return $"{windowName}\n{point.Sample.RecordedAt.ToLocalTime():ddd, MMM d · h:mm tt}"
+            + $"\n{point.AvailablePercent:0.#}% available"
+            + $"\n{100 - point.AvailablePercent:0.#}% consumed{suffix}";
+    }
+
+    private void DrawHoveredPoint(
+        Graphics graphics,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        Color primaryColor,
+        Color secondaryColor)
+    {
+        if (_hoveredPoint is null
+            || _hoveredPoint.Sample.RecordedAt < start
+            || _hoveredPoint.Sample.RecordedAt > end)
+        {
+            return;
+        }
+
+        var color = _hoveredPoint.Window == UsageWindowKind.FiveHour ? primaryColor : secondaryColor;
+        var point = new PointF(
+            MapX(_hoveredPoint.Sample.RecordedAt, start, end),
+            MapY(_hoveredPoint.AvailablePercent));
+        using var haloBrush = new SolidBrush(_palette.Card);
+        using var pointBrush = new SolidBrush(color);
+        using var outlinePen = new Pen(Color.FromArgb(220, _palette.Text), 1f);
+        graphics.FillEllipse(haloBrush, point.X - 5, point.Y - 5, 10, 10);
+        graphics.FillEllipse(pointBrush, point.X - 3.5f, point.Y - 3.5f, 7, 7);
+        graphics.DrawEllipse(outlinePen, point.X - 3.5f, point.Y - 3.5f, 7, 7);
+    }
+
+    private void ClearHover()
+    {
+        if (_hoveredPoint is null)
+        {
+            return;
+        }
+
+        _hoveredPoint = null;
+        _toolTip.Hide(this);
+        Invalidate();
+    }
 
     private static void DrawSegment(
         Graphics graphics,
         Pen pen,
         Brush pointBrush,
-        IReadOnlyList<PointF> points)
+        IReadOnlyList<PointF> points,
+        bool showSamplePoints)
     {
         if (points.Count >= 2)
         {
             graphics.DrawLines(pen, points.ToArray());
+        }
+
+        if (showSamplePoints)
+        {
+            foreach (var point in points)
+            {
+                graphics.FillEllipse(pointBrush, point.X - 1.6f, point.Y - 1.6f, 3.2f, 3.2f);
+            }
         }
 
         if (points.Count > 0)
@@ -356,4 +488,10 @@ public sealed class UsageHistoryChart : Control
         graphics.FillPolygon(brush, points);
         graphics.DrawPolygon(border, points);
     }
+
+    private sealed record HoverPoint(
+        UsageHistorySample Sample,
+        UsageWindowKind Window,
+        double AvailablePercent,
+        PointF Location);
 }

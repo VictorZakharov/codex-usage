@@ -16,6 +16,16 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 - Optional per-user launch at sign-in; no administrator access required.
 - Single-instance behavior and a self-contained single-file build.
 
+## Screenshots
+
+### Tray popup
+
+<img src="screenshots/main.png" alt="Codex Usage tray popup showing available quota windows" width="304">
+
+### Usage history
+
+<img src="screenshots/usage-history.png" alt="Codex Usage seven-day history graph with a point tooltip" width="754">
+
 ## How authentication works
 
 Codex Usage reuses the ChatGPT sign-in already stored by Codex in `%USERPROFILE%\.codex\auth.json` (or `$env:CODEX_HOME\auth.json`). It never asks for or stores a password, API key, cookie, or copied token.
@@ -54,6 +64,8 @@ To install it for the current user and create a Start Menu shortcut:
 ```
 
 The install script copies the app to `%LOCALAPPDATA%\Programs\CodexUsage`. Enable launch at sign-in from the tray menu or Settings.
+
+"Start with Windows" applies at the next full Windows sign-in or reboot; locking and unlocking the current session does not rerun startup apps. Windows may also delay `Run`-key applications briefly after sign-in.
 
 ## Test
 

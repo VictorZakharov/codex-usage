@@ -81,32 +81,38 @@ public static class TrayIconRenderer
         var availability = Math.Clamp(availablePercent, 0, 100);
         var accent = error ? palette.Danger : palette.AvailabilityColor(availability);
         var ringWidth = 1.3f * scale;
-        var ringInset = 0.78f * scale;
-        var ringDiameter = (16f * scale) - (ringInset * 2);
-        var ringRectangle = new RectangleF(ringInset, ringInset, ringDiameter, ringDiameter);
+        var perimeter = CreatePerimeter(scale, ringWidth);
+        using var perimeterPath = new GraphicsPath();
+        perimeterPath.AddPolygon(perimeter);
 
         using var centerBrush = new SolidBrush(Color.FromArgb(226, 18, 20, 23));
-        graphics.FillEllipse(centerBrush, ringRectangle);
+        graphics.FillPath(centerBrush, perimeterPath);
 
         using var basePen = new Pen(Color.FromArgb(92, 174, 177, 185), ringWidth)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
+            LineJoin = LineJoin.Round,
         };
-        graphics.DrawEllipse(basePen, ringRectangle);
+        graphics.DrawPolygon(basePen, perimeter);
 
         using var accentPen = new Pen(accent, ringWidth)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
+            LineJoin = LineJoin.Round,
         };
         if (error || availability >= 99.95d)
         {
-            graphics.DrawEllipse(accentPen, ringRectangle);
+            graphics.DrawPolygon(accentPen, perimeter);
         }
         else if (availability > 0)
         {
-            graphics.DrawArc(accentPen, ringRectangle, -90, (float)availability * 3.6f);
+            var pointCount = Math.Clamp(
+                (int)Math.Ceiling(perimeter.Length * (availability / 100d)),
+                2,
+                perimeter.Length);
+            graphics.DrawLines(accentPen, perimeter[..pointCount]);
         }
 
         if (error)
@@ -139,6 +145,39 @@ public static class TrayIconRenderer
             using var dotBrush = new SolidBrush(palette.Accent);
             graphics.FillEllipse(dotBrush, dotX, dotY, dotSize, dotSize);
         }
+    }
+
+    private static PointF[] CreatePerimeter(float scale, float strokeWidth)
+    {
+        const int pointCount = 240;
+        const float lobeDepth = 0.11f;
+        var normalized = new PointF[pointCount];
+        var maximumX = 0f;
+        var maximumY = 0f;
+
+        for (var index = 0; index < pointCount; index++)
+        {
+            var angle = (-Math.PI / 2d) + ((Math.PI * 2d * index) / pointCount);
+            var radius = 1d + (lobeDepth * Math.Cos(6d * angle));
+            var point = new PointF(
+                (float)(Math.Cos(angle) * radius),
+                (float)(Math.Sin(angle) * radius));
+            normalized[index] = point;
+            maximumX = Math.Max(maximumX, Math.Abs(point.X));
+            maximumY = Math.Max(maximumY, Math.Abs(point.Y));
+        }
+
+        var halfStroke = strokeWidth / (2f * scale);
+        var targetExtent = 8f - halfStroke - 0.1f;
+        var horizontalScale = targetExtent / maximumX;
+        var verticalScale = targetExtent / maximumY;
+        var center = 8f * scale;
+
+        return normalized
+            .Select(point => new PointF(
+                center + (point.X * horizontalScale * scale),
+                center + (point.Y * verticalScale * scale)))
+            .ToArray();
     }
 
     private static void DrawNumber(Graphics graphics, string label, float scale)

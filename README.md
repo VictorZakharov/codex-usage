@@ -6,7 +6,7 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 
 ## Features
 
-- Supersampled, anti-aliased system-tray meter showing the least available Codex quota window; a fresh window is `100` and fully filled.
+- Supersampled, anti-aliased system-tray meter with an original six-lobed contour showing the least available Codex quota window; a fresh window is `100` and fully filled.
 - Compact popup with available percentages for the 5-hour and weekly windows, reset countdowns, plan, and credits when available.
 - Persistent 24-hour, 7-day, 30-day, and 90-day history charts, with per-point hover details and markers for quota restoration or resets, opened from the tray's right-click menu.
 - Support for model-specific Codex limits returned by the service.

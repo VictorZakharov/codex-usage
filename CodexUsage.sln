@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexUsage.Core", "src\CodexUsage.Core\CodexUsage.Core.csproj", "{E3E3D8B3-43D0-47BD-9F27-98F66F03F443}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexUsage.App", "src\CodexUsage.App\CodexUsage.App.csproj", "{5E701603-9A7C-47F7-A702-C5FBD53AB09C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexUsage.Tests", "tests\CodexUsage.Tests\CodexUsage.Tests.csproj", "{C0B14DBC-12EC-4728-8770-70F01BB44964}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E3E3D8B3-43D0-47BD-9F27-98F66F03F443}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E3E3D8B3-43D0-47BD-9F27-98F66F03F443}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E3E3D8B3-43D0-47BD-9F27-98F66F03F443}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E3E3D8B3-43D0-47BD-9F27-98F66F03F443}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5E701603-9A7C-47F7-A702-C5FBD53AB09C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5E701603-9A7C-47F7-A702-C5FBD53AB09C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5E701603-9A7C-47F7-A702-C5FBD53AB09C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5E701603-9A7C-47F7-A702-C5FBD53AB09C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C0B14DBC-12EC-4728-8770-70F01BB44964}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C0B14DBC-12EC-4728-8770-70F01BB44964}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C0B14DBC-12EC-4728-8770-70F01BB44964}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C0B14DBC-12EC-4728-8770-70F01BB44964}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

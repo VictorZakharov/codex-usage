@@ -108,7 +108,7 @@ internal static class PreviewRenderer
         return true;
     }
 
-    private static bool TryReadIconPercent(string argument, out double availablePercent)
+    private static bool TryReadIconPercent(string argument, out double? availablePercent)
     {
         const string command = "--render-icon";
         availablePercent = 100;
@@ -117,11 +117,24 @@ internal static class PreviewRenderer
             return true;
         }
 
-        return argument.StartsWith(command + "=", StringComparison.OrdinalIgnoreCase)
+        if (argument.Equals(command + "=loading", StringComparison.OrdinalIgnoreCase))
+        {
+            availablePercent = null;
+            return true;
+        }
+
+        if (argument.StartsWith(command + "=", StringComparison.OrdinalIgnoreCase)
             && double.TryParse(
                 argument[(command.Length + 1)..],
                 NumberStyles.Float,
                 CultureInfo.InvariantCulture,
-                out availablePercent);
+                out var parsedPercent))
+        {
+            availablePercent = parsedPercent;
+            return true;
+        }
+
+        availablePercent = null;
+        return false;
     }
 }

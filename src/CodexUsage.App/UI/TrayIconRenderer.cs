@@ -9,14 +9,15 @@ public static class TrayIconRenderer
     private const int SupersamplingFactor = 8;
 
     public static Icon Create(
-        double availablePercent,
+        double? availablePercent,
         ThemePalette palette,
         bool error,
         bool refreshing,
-        int size = 16)
+        int size = 16,
+        int loadingFrame = 0)
     {
         size = Math.Clamp(size, 16, 64);
-        using var bitmap = RenderBitmap(availablePercent, palette, error, refreshing, size);
+        using var bitmap = RenderBitmap(availablePercent, palette, error, refreshing, size, loadingFrame);
         var handle = bitmap.GetHicon();
         try
         {
@@ -30,11 +31,12 @@ public static class TrayIconRenderer
     }
 
     private static Bitmap RenderBitmap(
-        double availablePercent,
+        double? availablePercent,
         ThemePalette palette,
         bool error,
         bool refreshing,
-        int size)
+        int size,
+        int loadingFrame)
     {
         var renderSize = size * SupersamplingFactor;
         using var canvas = new Bitmap(renderSize, renderSize, PixelFormat.Format32bppPArgb);
@@ -50,7 +52,8 @@ public static class TrayIconRenderer
                 palette,
                 error,
                 refreshing,
-                renderSize / 16f);
+                renderSize / 16f,
+                loadingFrame);
         }
 
         var result = new Bitmap(size, size, PixelFormat.Format32bppArgb);
@@ -72,14 +75,20 @@ public static class TrayIconRenderer
 
     private static void DrawIcon(
         Graphics graphics,
-        double availablePercent,
+        double? availablePercent,
         ThemePalette palette,
         bool error,
         bool refreshing,
-        float scale)
+        float scale,
+        int loadingFrame)
     {
-        var availability = Math.Clamp(availablePercent, 0, 100);
-        var accent = error ? palette.Danger : palette.AvailabilityColor(availability);
+        var hasReading = availablePercent.HasValue;
+        var availability = Math.Clamp(availablePercent ?? 0d, 0, 100);
+        var accent = error
+            ? palette.Danger
+            : hasReading
+                ? palette.AvailabilityColor(availability)
+                : palette.Accent;
         var ringWidth = 1.3f * scale;
         var perimeter = CreatePerimeter(scale, ringWidth);
         using var perimeterPath = new GraphicsPath();
@@ -106,6 +115,10 @@ public static class TrayIconRenderer
         {
             graphics.DrawPolygon(accentPen, perimeter);
         }
+        else if (!hasReading)
+        {
+            DrawLoadingPerimeter(graphics, accentPen, perimeter, loadingFrame);
+        }
         else if (availability > 0)
         {
             var pointCount = Math.Clamp(
@@ -125,12 +138,16 @@ public static class TrayIconRenderer
             graphics.DrawLine(errorPen, 5.2f * scale, 5.2f * scale, 10.8f * scale, 10.8f * scale);
             graphics.DrawLine(errorPen, 10.8f * scale, 5.2f * scale, 5.2f * scale, 10.8f * scale);
         }
+        else if (!hasReading)
+        {
+            DrawLoadingDots(graphics, loadingFrame, scale);
+        }
         else
         {
             DrawNumber(graphics, Math.Round(availability).ToString("0"), scale);
         }
 
-        if (refreshing)
+        if (refreshing && hasReading)
         {
             var dotSize = 2.7f * scale;
             var dotX = 12.4f * scale;
@@ -144,6 +161,41 @@ public static class TrayIconRenderer
                 dotSize + (1.4f * scale));
             using var dotBrush = new SolidBrush(palette.Accent);
             graphics.FillEllipse(dotBrush, dotX, dotY, dotSize, dotSize);
+        }
+    }
+
+    private static void DrawLoadingPerimeter(
+        Graphics graphics,
+        Pen pen,
+        PointF[] perimeter,
+        int loadingFrame)
+    {
+        var segmentLength = perimeter.Length / 5;
+        var start = ((loadingFrame % 24) * perimeter.Length) / 24;
+        var segment = new PointF[segmentLength + 1];
+        for (var index = 0; index < segment.Length; index++)
+        {
+            segment[index] = perimeter[(start + index) % perimeter.Length];
+        }
+
+        graphics.DrawLines(pen, segment);
+    }
+
+    private static void DrawLoadingDots(Graphics graphics, int loadingFrame, float scale)
+    {
+        var activeDot = (loadingFrame / 2) % 3;
+        var dotDiameter = 1.55f * scale;
+        var dotCenters = new[] { 5.35f, 8f, 10.65f };
+        for (var index = 0; index < dotCenters.Length; index++)
+        {
+            var alpha = index == activeDot ? 250 : 115;
+            using var brush = new SolidBrush(Color.FromArgb(alpha, 255, 255, 255));
+            graphics.FillEllipse(
+                brush,
+                (dotCenters[index] * scale) - (dotDiameter / 2f),
+                (8f * scale) - (dotDiameter / 2f),
+                dotDiameter,
+                dotDiameter);
         }
     }
 

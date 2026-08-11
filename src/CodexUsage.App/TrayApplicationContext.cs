@@ -17,6 +17,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly PopupForm _popup;
     private readonly NotifyIcon _trayIcon;
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
+    private readonly System.Windows.Forms.Timer _loadingAnimationTimer = new() { Interval = 125 };
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ToolStripMenuItem _refreshMenuItem;
     private readonly ToolStripMenuItem _startupMenuItem;
@@ -29,6 +30,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private HistoryForm? _historyForm;
     private bool _refreshing;
     private bool _firstIdleHandled;
+    private int _loadingAnimationFrame;
 
     public TrayApplicationContext()
     {
@@ -80,6 +82,13 @@ public sealed class TrayApplicationContext : ApplicationContext
         };
         _trayIcon.MouseClick += OnTrayMouseClick;
 
+        _loadingAnimationTimer.Tick += (_, _) =>
+        {
+            _loadingAnimationFrame = (_loadingAnimationFrame + 1) % 24;
+            UpdateIcon(error: false);
+        };
+        _loadingAnimationTimer.Start();
+
         _refreshTimer.Interval = checked(_settings.RefreshIntervalMinutes * 60_000);
         _refreshTimer.Tick += async (_, _) => await RefreshAsync();
         _refreshTimer.Start();
@@ -93,6 +102,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             _shutdown.Cancel();
+            _loadingAnimationTimer.Stop();
+            _loadingAnimationTimer.Dispose();
             _refreshTimer.Stop();
             _refreshTimer.Dispose();
             _trayIcon.Visible = false;
@@ -127,6 +138,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         _refreshing = true;
+        if (_snapshot is null)
+        {
+            _loadingAnimationFrame = 0;
+            _loadingAnimationTimer.Start();
+        }
+
         _refreshMenuItem.Enabled = false;
         _popup.UpdateState(_snapshot, refreshing: true, error: null);
         UpdateIcon(error: false);
@@ -161,6 +178,11 @@ public sealed class TrayApplicationContext : ApplicationContext
             _refreshing = false;
             _refreshMenuItem.Enabled = true;
             _popup.UpdateState(_snapshot, refreshing: false, error: _lastError);
+            if (_snapshot is not null || _lastError is not null)
+            {
+                _loadingAnimationTimer.Stop();
+            }
+
             UpdateIcon(error: _lastError is not null);
         }
     }
@@ -188,11 +210,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         var palette = ThemePalette.Resolve(_settings.Theme);
         var iconSize = Math.Clamp(SystemInformation.SmallIconSize.Width, 16, 64);
         var icon = TrayIconRenderer.Create(
-            _snapshot?.LowestAvailablePercent ?? 100,
+            _snapshot?.LowestAvailablePercent,
             palette,
             error,
             _refreshing,
-            iconSize);
+            iconSize,
+            _loadingAnimationFrame);
         _trayIcon.Icon = icon;
         var previous = _renderedIcon;
         _renderedIcon = icon;
@@ -210,7 +233,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         if (_snapshot is null)
         {
-            return "Codex · 100% available · Loading";
+            return "Codex Usage \u00B7 Loading\u2026";
         }
 
         var session = _snapshot.Primary is null ? "—" : $"{_snapshot.Primary.AvailablePercent:0}%";

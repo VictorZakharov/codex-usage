@@ -14,7 +14,7 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 - Optional Windows notifications when available quota drops to 30%, 20%, 10%, or 0%.
 - System, dark, and light themes.
 - Optional per-user launch at sign-in; no administrator access required.
-- Single-instance behavior and a self-contained single-file build.
+- Single-instance behavior with self-contained and smaller .NET-dependent single-file builds.
 
 ## Screenshots
 
@@ -42,20 +42,30 @@ Prerequisites: Windows 10/11 and the .NET 10 SDK.
 dotnet run --project .\src\CodexUsage.App\CodexUsage.App.csproj
 ```
 
-To create a self-contained executable that does not require .NET on the destination computer:
+To create a self-contained executable that does not require .NET on the destination computer, run or double-click `build.bat`:
 
-```powershell
-.\scripts\build.ps1
-.\artifacts\win-x64\CodexUsage.exe
+```batch
+build.bat
+artifacts\win-x64\CodexUsage.exe
 ```
 
-The build also writes `CodexUsage.exe.sha256` beside the executable.
+For a much smaller single-file executable, use `build-small.bat` instead:
+
+```batch
+build-small.bat
+artifacts\win-x64-framework-dependent\CodexUsage.exe
+```
+
+The smaller build requires the x64 .NET 10 Desktop Runtime on the destination computer. Both builds also write `CodexUsage.exe.sha256` beside the executable.
 
 For Windows on ARM:
 
-```powershell
-.\scripts\build.ps1 -Architecture arm64
+```batch
+build.bat -Architecture arm64
+build-small.bat -Architecture arm64
 ```
+
+The equivalent PowerShell commands are `.\scripts\build.ps1` and `.\scripts\build.ps1 -FrameworkDependent`.
 
 To install it for the current user and create a Start Menu shortcut:
 

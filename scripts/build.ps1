@@ -21,6 +21,10 @@ dotnet publish $project `
     -p:DebugType=None `
     -p:DebugSymbols=false
 
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet publish failed with exit code $LASTEXITCODE"
+}
+
 $executable = Join-Path $output "CodexUsage.exe"
 if (-not (Test-Path -LiteralPath $executable)) {
     throw "Publish completed without producing $executable"

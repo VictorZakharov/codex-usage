@@ -47,37 +47,86 @@ internal static class PreviewRenderer
 
         if (args[0].Equals("--render-history", StringComparison.OrdinalIgnoreCase))
         {
-            var historyNow = DateTimeOffset.UtcNow;
-            var start = historyNow.AddDays(-7);
-            var samples = Enumerable.Range(0, (7 * 24) + 1)
-                .Select(index =>
+            var historyNow = DateTimeOffset.Now;
+            var localDate = historyNow.Date;
+            var currentReset = AtLocalTime(localDate.AddHours(7));
+            if (currentReset > historyNow)
+            {
+                currentReset = AtLocalTime(localDate.AddDays(-1).AddHours(7));
+            }
+
+            var previousReset = AtLocalTime(currentReset.Date.AddDays(-1).AddHours(7));
+            var start = historyNow.AddHours(-66);
+            var activitySchedule = new UsageActivitySchedule(
+                Enumerable.Range(7, 15),
+                TimeZoneInfo.Local);
+            var sampleTimes = Enumerable.Range(0, 123)
+                .Select(index => start.AddTicks(
+                    ((historyNow - start).Ticks * index) / 122))
+                .Append(previousReset)
+                .Append(currentReset)
+                .Distinct()
+                .OrderBy(timestamp => timestamp)
+                .ToArray();
+            var availableBeforePreviousReset = activitySchedule
+                .GetActiveDuration(start, previousReset)
+                .TotalHours;
+            var availableBeforeCurrentReset = activitySchedule
+                .GetActiveDuration(previousReset, currentReset)
+                .TotalHours;
+            var activeSinceCurrentReset = activitySchedule
+                .GetActiveDuration(currentReset, historyNow)
+                .TotalHours;
+            availableBeforePreviousReset = Math.Max(1d, availableBeforePreviousReset);
+            availableBeforeCurrentReset = Math.Max(1d, availableBeforeCurrentReset);
+            activeSinceCurrentReset = Math.Max(1d, activeSinceCurrentReset);
+            var samples = sampleTimes
+                .Select(recordedAt =>
                 {
-                    var recordedAt = start.AddHours(index);
-                    var primaryWindowStart = index - (index % 5);
-                    var primaryActiveHours = Enumerable.Range(primaryWindowStart + 1, index - primaryWindowStart)
-                        .Count(hour => IsPreviewActiveHour(start.AddHours(hour)));
-                    var primaryAvailable = 100d - (primaryActiveHours * 22d);
-                    var weeklyWindowStart = index >= 96 ? 96 : 0;
-                    var weeklyActiveHours = Enumerable.Range(weeklyWindowStart + 1, index - weeklyWindowStart)
-                        .Count(hour => IsPreviewActiveHour(start.AddHours(hour)));
-                    var weeklyAvailable = (index >= 96 ? 100d : 92d) - (weeklyActiveHours * 1.1d);
+                    double availablePercent;
+                    DateTimeOffset resetsAt;
+                    if (recordedAt < previousReset)
+                    {
+                        var activeHours = activitySchedule
+                            .GetActiveDuration(start, recordedAt)
+                            .TotalHours;
+                        availablePercent = 99d - (29d * activeHours / availableBeforePreviousReset);
+                        resetsAt = previousReset;
+                    }
+                    else if (recordedAt < currentReset)
+                    {
+                        var activeHours = activitySchedule
+                            .GetActiveDuration(previousReset, recordedAt)
+                            .TotalHours;
+                        availablePercent = 100d - (12d * activeHours / availableBeforeCurrentReset);
+                        resetsAt = previousReset.AddDays(7);
+                    }
+                    else
+                    {
+                        var activeHours = activitySchedule
+                            .GetActiveDuration(currentReset, recordedAt)
+                            .TotalHours;
+                        availablePercent = 100d - (16d * activeHours / activeSinceCurrentReset);
+                        resetsAt = currentReset.AddDays(7);
+                    }
+
                     return new UsageHistorySample(
                         recordedAt,
-                        primaryAvailable,
-                        Math.Clamp(weeklyAvailable, 0, 100),
-                        recordedAt.AddHours(5 - (index % 5)),
-                        start.AddDays(index >= 96 ? 11 : 7),
-                        TimeSpan.FromHours(5),
-                        TimeSpan.FromDays(7));
+                        Math.Clamp(Math.Round(availablePercent), 0, 100),
+                        null,
+                        resetsAt,
+                        null,
+                        TimeSpan.FromDays(7),
+                        null);
                 })
                 .ToArray();
 
             using var historyForm = new HistoryForm(
                 new AppSettings { Theme = ThemeMode.Dark },
                 (_, _, _, _) => new CodexUsage.Tokens.CodexTokenUsageSummary(
-                    84_600_000,
-                    12_400_000,
-                    3_800_000,
+                    2_200_000_000,
+                    424_680_000,
+                    424_680_000,
                     42));
             historyForm.UpdateHistory(samples);
             historyForm.Location = new Point(-10_000, -10_000);
@@ -85,8 +134,8 @@ internal static class PreviewRenderer
             Application.DoEvents();
             Thread.Sleep(20);
             Application.DoEvents();
-            using var historyBitmap = new Bitmap(historyForm.ClientSize.Width, historyForm.ClientSize.Height);
-            historyForm.DrawToBitmap(historyBitmap, new Rectangle(Point.Empty, historyForm.ClientSize));
+            using var historyBitmap = new Bitmap(historyForm.Width, historyForm.Height);
+            historyForm.DrawToBitmap(historyBitmap, new Rectangle(Point.Empty, historyForm.Size));
             historyBitmap.Save(outputPath, ImageFormat.Png);
             historyForm.Hide();
             return true;
@@ -154,9 +203,6 @@ internal static class PreviewRenderer
         return false;
     }
 
-    private static bool IsPreviewActiveHour(DateTimeOffset timestamp)
-    {
-        var localHour = timestamp.ToLocalTime().Hour;
-        return localHour is >= 7 and < 23;
-    }
+    private static DateTimeOffset AtLocalTime(DateTime timestamp)
+        => new(timestamp, TimeZoneInfo.Local.GetUtcOffset(timestamp));
 }

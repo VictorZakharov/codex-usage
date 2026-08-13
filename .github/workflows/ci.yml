@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Format, build, and test
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore CodexUsage.sln
+
+      - name: Verify formatting
+        run: dotnet format CodexUsage.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build CodexUsage.sln --configuration Release --no-restore
+
+      - name: Test
+        run: >-
+          dotnet run
+          --project .\tests\CodexUsage.Tests\CodexUsage.Tests.csproj
+          --configuration Release
+          --no-build

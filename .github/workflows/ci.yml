@@ -25,6 +25,24 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Enforce linear pull-request history
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $mergeCommits = @(git rev-list --merges "$base..HEAD")
+          if ($mergeCommits.Count -eq 0) {
+            Write-Host "Pull-request history is linear."
+            exit 0
+          }
+
+          Write-Error "Pull-request branches must not contain merge commits. Rebase the branch onto main."
+          git show --no-patch --format="%h %s" $mergeCommits
+          exit 1
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v6

@@ -17,32 +17,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Format, build, and test
-    runs-on: windows-latest
-    timeout-minutes: 15
+  linear-history:
+    name: Linear PR history
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out pull-request head
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Reject merge commits
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          merge_commits="$(git rev-list --merges "$base..HEAD")"
+
+          if [[ -z "$merge_commits" ]]; then
+            echo "Pull-request history is linear."
+            exit 0
+          fi
+
+          echo "::error::Pull-request branches must not contain merge commits. Rebase the branch onto main."
+          while read -r commit; do
+            git show --no-patch --format="%h %s" "$commit"
+          done <<< "$merge_commits"
+          exit 1
+
+  formatting:
+    name: Formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EnableWindowsTargeting: true
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Enforce linear pull-request history
-        if: github.event_name == 'pull_request'
-        shell: pwsh
-        run: |
-          $base = "${{ github.event.pull_request.base.sha }}"
-          $mergeCommits = @(git rev-list --merges "$base..HEAD")
-          if ($mergeCommits.Count -eq 0) {
-            Write-Host "Pull-request history is linear."
-            exit 0
-          }
-
-          Write-Error "Pull-request branches must not contain merge commits. Rebase the branch onto main."
-          git show --no-patch --format="%h %s" $mergeCommits
-          exit 1
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v6
@@ -54,6 +68,23 @@ jobs:
 
       - name: Verify formatting
         run: dotnet format CodexUsage.sln --verify-no-changes --no-restore
+
+  build-and-test:
+    name: Build and test
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore CodexUsage.sln
 
       - name: Build
         run: dotnet build CodexUsage.sln --configuration Release --no-restore

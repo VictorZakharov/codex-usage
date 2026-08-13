@@ -453,8 +453,12 @@ internal static class Program
             .OfType<Label>()
             .Single(label => label.Text.Contains("Latest:", StringComparison.Ordinal))
             .Text;
+        var offHoursToggle = form.Controls
+            .OfType<CheckBox>()
+            .Single(control => control.Text == "Show off-hour flats");
         Contains("Latest: Weekly 88%", status, "history uses reported window label");
         Equal(false, status.Contains("Secondary", StringComparison.Ordinal), "history hides unavailable window");
+        Equal(true, offHoursToggle.Enabled, "off-hour toggle remains readable before schedule learning");
     }
 
     private static void HistoryFormShowsLearnedOffHoursAndToggle()

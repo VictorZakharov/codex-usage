@@ -71,7 +71,6 @@ public sealed class HistoryForm : Form
 
         _offHoursCheckBox.Text = "Show off-hour flats";
         _offHoursCheckBox.Checked = true;
-        _offHoursCheckBox.Enabled = false;
         _offHoursCheckBox.AutoSize = false;
         _offHoursCheckBox.TextAlign = ContentAlignment.MiddleLeft;
         _offHoursCheckBox.CheckedChanged += (_, _) =>
@@ -192,7 +191,6 @@ public sealed class HistoryForm : Form
     {
         _chart.ShowOffHourSegments = _offHoursCheckBox.Checked;
         _chart.SetData(_samples, _selectedRange.Duration, _palette);
-        _offHoursCheckBox.Enabled = _chart.HasLearnedOffHours;
         _subtitleLabel.Text = _chart.HasLearnedOffHours
             ? "▲ marks a reset; dashed red uses the learned schedule and pauses during assumed off hours."
             : "▲ marks a reset; dashed red uses elapsed time until 24 hours of history can identify off hours.";

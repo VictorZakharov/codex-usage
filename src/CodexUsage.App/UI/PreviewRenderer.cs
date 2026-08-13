@@ -53,14 +53,18 @@ internal static class PreviewRenderer
                 .Select(index =>
                 {
                     var recordedAt = start.AddHours(index);
-                    var primaryAvailable = 100d - ((index % 5) * 16d);
-                    var weeklyAvailable = 92d - (index * 0.28d) + (index >= 96 ? 22d : 0d);
+                    var primaryAvailable = index == 7 * 24
+                        ? 20d
+                        : 100d - ((index % 5) * 16d);
+                    var weeklyAvailable = index == 7 * 24
+                        ? 25d
+                        : 92d - (index * 0.28d) + (index >= 96 ? 22d : 0d);
                     return new UsageHistorySample(
                         recordedAt,
                         primaryAvailable,
                         Math.Clamp(weeklyAvailable, 0, 100),
                         recordedAt.AddHours(5 - (index % 5)),
-                        start.AddDays(index >= 96 ? 14 : 7));
+                        start.AddDays(index >= 96 ? 11 : 7));
                 })
                 .ToArray();
 

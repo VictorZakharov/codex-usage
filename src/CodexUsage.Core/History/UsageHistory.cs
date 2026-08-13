@@ -30,9 +30,23 @@ public sealed record UsageRestoreEvent(
     double PreviousAvailablePercent,
     double AvailablePercent);
 
+public sealed record UsageDepletionForecast(
+    UsageWindowKind Window,
+    DateTimeOffset WindowStartedAt,
+    DateTimeOffset RecordedAt,
+    DateTimeOffset ResetsAt,
+    double AvailablePercent,
+    double ConsumedPercentPerHour,
+    DateTimeOffset DepletesAt)
+{
+    public bool ReachesZeroBeforeReset => DepletesAt <= ResetsAt;
+}
+
 public static class UsageHistoryAnalysis
 {
     public const double MinimumRestoreJump = 5d;
+
+    private const double MinimumConsumedPercent = 0.01d;
 
     public static IReadOnlyList<UsageRestoreEvent> DetectRestoreEvents(
         IEnumerable<UsageHistorySample> samples)
@@ -57,6 +71,61 @@ public static class UsageHistoryAnalysis
         }
 
         return events;
+    }
+
+    public static UsageDepletionForecast? ForecastDepletion(
+        IEnumerable<UsageHistorySample> samples,
+        UsageWindowKind window)
+    {
+        var latest = samples.OrderBy(sample => sample.RecordedAt).LastOrDefault();
+        if (latest is null)
+        {
+            return null;
+        }
+
+        var (available, resetsAt, duration) = window switch
+        {
+            UsageWindowKind.FiveHour => (
+                latest.PrimaryAvailablePercent,
+                latest.PrimaryResetsAt,
+                TimeSpan.FromHours(5)),
+            UsageWindowKind.Weekly => (
+                latest.SecondaryAvailablePercent,
+                latest.SecondaryResetsAt,
+                TimeSpan.FromDays(7)),
+            _ => throw new ArgumentOutOfRangeException(nameof(window), window, null),
+        };
+        if (available is null || resetsAt is null)
+        {
+            return null;
+        }
+
+        // Each window begins fully available; its next reset minus its duration is the last reset.
+        var windowStartedAt = resetsAt.Value - duration;
+        var elapsed = latest.RecordedAt - windowStartedAt;
+        var availablePercent = Math.Clamp(available.Value, 0d, 100d);
+        var consumedPercent = 100d - availablePercent;
+        if (elapsed <= TimeSpan.Zero || resetsAt <= latest.RecordedAt || consumedPercent < MinimumConsumedPercent)
+        {
+            return null;
+        }
+
+        var ratePerHour = consumedPercent / elapsed.TotalHours;
+        var hoursToDepletion = 100d / ratePerHour;
+        if (!double.IsFinite(hoursToDepletion)
+            || hoursToDepletion > (DateTimeOffset.MaxValue - windowStartedAt).TotalHours)
+        {
+            return null;
+        }
+
+        return new UsageDepletionForecast(
+            window,
+            windowStartedAt,
+            latest.RecordedAt,
+            resetsAt.Value,
+            availablePercent,
+            ratePerHour,
+            windowStartedAt.AddHours(hoursToDepletion));
     }
 
     private static void AddRestoreEvent(

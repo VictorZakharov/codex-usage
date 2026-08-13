@@ -15,9 +15,13 @@ public sealed class UsageHistoryChart : Control
 
     private UsageHistorySample[] _samples = [];
     private IReadOnlyList<UsageRestoreEvent> _restoreEvents = [];
+    private IReadOnlyList<UsageDepletionForecast> _depletionForecasts = [];
     private ThemePalette _palette = ThemePalette.Resolve(Settings.ThemeMode.System);
     private TimeSpan _range = TimeSpan.FromDays(7);
     private RectangleF _plotRectangle;
+    private RectangleF _historyRectangle;
+    private RectangleF _forecastRectangle;
+    private DateTimeOffset? _forecastEnd;
     private HoverPoint? _hoveredPoint;
 
     public UsageHistoryChart()
@@ -35,6 +39,18 @@ public sealed class UsageHistoryChart : Control
     {
         _samples = samples.OrderBy(sample => sample.RecordedAt).ToArray();
         _restoreEvents = UsageHistoryAnalysis.DetectRestoreEvents(_samples);
+        var now = DateTimeOffset.Now;
+        _depletionForecasts = Enum.GetValues<UsageWindowKind>()
+            .Select(window => UsageHistoryAnalysis.ForecastDepletion(_samples, window))
+            .OfType<UsageDepletionForecast>()
+            .Where(forecast => forecast.ReachesZeroBeforeReset
+                && forecast.DepletesAt > now
+                && forecast.ResetsAt > now)
+            .OrderBy(forecast => forecast.DepletesAt)
+            .ToArray();
+        _forecastEnd = _depletionForecasts.Count == 0
+            ? null
+            : _depletionForecasts.Max(forecast => forecast.DepletesAt);
         _range = range;
         _palette = palette;
         BackColor = palette.Card;
@@ -55,7 +71,7 @@ public sealed class UsageHistoryChart : Control
     protected override void OnMouseMove(MouseEventArgs eventArgs)
     {
         base.OnMouseMove(eventArgs);
-        if (!_plotRectangle.Contains(eventArgs.Location) || _samples.Length == 0)
+        if (!_historyRectangle.Contains(eventArgs.Location) || _samples.Length == 0)
         {
             ClearHover();
             return;
@@ -102,10 +118,12 @@ public sealed class UsageHistoryChart : Control
         }
 
         _plotRectangle = new RectangleF(54, 52, Width - 76, Height - 96);
+        ConfigurePlotRectangles();
+        DrawForecastBackground(graphics);
         DrawLegend(graphics);
-        DrawGrid(graphics);
 
         var (start, end) = VisibleInterval();
+        DrawGrid(graphics, start, end);
         var visibleSamples = VisibleSamples(start, end);
         if (visibleSamples.Count == 0)
         {
@@ -133,9 +151,10 @@ public sealed class UsageHistoryChart : Control
             start,
             end);
         DrawRestoreMarkers(graphics, start, end, primaryColor, secondaryColor);
+        DrawDepletionForecasts(graphics, start, end);
         DrawHoveredPoint(graphics, start, end, primaryColor, secondaryColor);
 
-        if (visibleSamples.Count == 1)
+        if (visibleSamples.Count == 1 && _depletionForecasts.Count == 0)
         {
             DrawEmptyState(graphics, "Collecting more samples…");
         }
@@ -150,15 +169,25 @@ public sealed class UsageHistoryChart : Control
             ? Color.FromArgb(185, 151, 255)
             : Color.FromArgb(115, 78, 185);
 
-        DrawLegendLine(graphics, primaryColor, 18, 24);
-        graphics.DrawString("5-hour available", legendFont, textBrush, 38, 15);
-        DrawLegendLine(graphics, secondaryColor, 166, 24);
-        graphics.DrawString("Weekly available", legendFont, textBrush, 186, 15);
-        DrawUpwardTriangle(graphics, _palette.Success, new PointF(327, 24), 5f);
-        graphics.DrawString("Restored / reset", legendFont, textBrush, 339, 15);
+        var x = DrawLineLegend(graphics, legendFont, textBrush, 18, "5-hour", primaryColor);
+        x = DrawLineLegend(graphics, legendFont, textBrush, x, "Weekly", secondaryColor);
+        DrawUpwardTriangle(graphics, _palette.Success, new PointF(x + 5, 24), 5f);
+        graphics.DrawString("Reset", legendFont, textBrush, x + 16, 15);
+        x += 16 + graphics.MeasureString("Reset", legendFont).Width + 20;
+        if (_depletionForecasts.Count > 0)
+        {
+            DrawLineLegend(
+                graphics,
+                legendFont,
+                textBrush,
+                x,
+                "Projected to 0%",
+                _palette.Danger,
+                dashed: true);
+        }
     }
 
-    private void DrawGrid(Graphics graphics)
+    private void DrawGrid(Graphics graphics, DateTimeOffset start, DateTimeOffset end)
     {
         using var axisFont = new Font(Font.FontFamily, 8f, FontStyle.Regular);
         using var labelBrush = new SolidBrush(_palette.MutedText);
@@ -173,16 +202,136 @@ public sealed class UsageHistoryChart : Control
             graphics.DrawString(label, axisFont, labelBrush, _plotRectangle.Left - size.Width - 8, y - (size.Height / 2));
         }
 
-        var (start, end) = VisibleInterval();
-        for (var index = 0; index <= 4; index++)
+        var tickCount = _forecastEnd is null ? 5 : 4;
+        for (var index = 0; index < tickCount; index++)
         {
-            var fraction = index / 4d;
-            var x = _plotRectangle.Left + ((float)fraction * _plotRectangle.Width);
+            var fraction = index / (double)(tickCount - 1);
+            var x = _historyRectangle.Left + ((float)fraction * _historyRectangle.Width);
             var instant = start + TimeSpan.FromTicks((long)((end - start).Ticks * fraction));
-            var label = FormatAxisTime(instant.ToLocalTime());
+            var label = _forecastEnd is not null && index == tickCount - 1
+                ? "Now"
+                : FormatAxisTime(instant.ToLocalTime());
             var size = graphics.MeasureString(label, axisFont);
-            var labelX = Math.Clamp(x - (size.Width / 2), _plotRectangle.Left, _plotRectangle.Right - size.Width);
+            var labelX = Math.Clamp(
+                x - (size.Width / 2),
+                _historyRectangle.Left,
+                _historyRectangle.Right - size.Width);
             graphics.DrawString(label, axisFont, labelBrush, labelX, _plotRectangle.Bottom + 8);
+        }
+
+        if (_forecastEnd is not null)
+        {
+            var label = FormatForecastAxisTime(_forecastEnd.Value);
+            var size = graphics.MeasureString(label, axisFont);
+            graphics.DrawString(
+                label,
+                axisFont,
+                labelBrush,
+                _forecastRectangle.Right - size.Width,
+                _plotRectangle.Bottom + 8);
+        }
+    }
+
+    private void ConfigurePlotRectangles()
+    {
+        if (_forecastEnd is null)
+        {
+            _historyRectangle = _plotRectangle;
+            _forecastRectangle = RectangleF.Empty;
+            return;
+        }
+
+        var forecastWidth = Math.Clamp(_plotRectangle.Width * 0.24f, 128f, 210f);
+        _historyRectangle = new RectangleF(
+            _plotRectangle.Left,
+            _plotRectangle.Top,
+            _plotRectangle.Width - forecastWidth,
+            _plotRectangle.Height);
+        _forecastRectangle = new RectangleF(
+            _historyRectangle.Right,
+            _plotRectangle.Top,
+            forecastWidth,
+            _plotRectangle.Height);
+    }
+
+    private void DrawForecastBackground(Graphics graphics)
+    {
+        if (_forecastEnd is null)
+        {
+            return;
+        }
+
+        using var backgroundBrush = new SolidBrush(Color.FromArgb(
+            _palette.IsDark ? 18 : 10,
+            _palette.Danger));
+        graphics.FillRectangle(backgroundBrush, _forecastRectangle);
+        using var dividerPen = new Pen(Color.FromArgb(150, _palette.MutedText))
+        {
+            DashStyle = DashStyle.Dot,
+        };
+        graphics.DrawLine(
+            dividerPen,
+            _forecastRectangle.Left,
+            _forecastRectangle.Top,
+            _forecastRectangle.Left,
+            _forecastRectangle.Bottom);
+    }
+
+    private void DrawDepletionForecasts(
+        Graphics graphics,
+        DateTimeOffset historyStart,
+        DateTimeOffset historyEnd)
+    {
+        if (_forecastEnd is null)
+        {
+            return;
+        }
+
+        using var linePen = new Pen(_palette.Danger, 2.25f)
+        {
+            DashStyle = DashStyle.Dash,
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+        };
+        using var endpointBrush = new SolidBrush(_palette.Danger);
+        using var labelFont = new Font(Font.FontFamily, 8f, FontStyle.Bold);
+        using var labelBrush = new SolidBrush(_palette.Danger);
+        using var labelBackground = new SolidBrush(_palette.Card);
+        using var labelFormat = new StringFormat
+        {
+            FormatFlags = StringFormatFlags.NoWrap,
+            Trimming = StringTrimming.EllipsisCharacter,
+        };
+
+        for (var index = 0; index < _depletionForecasts.Count; index++)
+        {
+            var forecast = _depletionForecasts[index];
+            var projectedAtHistoryEnd = Math.Clamp(
+                100d - (forecast.ConsumedPercentPerHour
+                    * (historyEnd - forecast.WindowStartedAt).TotalHours),
+                0d,
+                100d);
+            var actualPoint = new PointF(
+                MapX(forecast.RecordedAt, historyStart, historyEnd),
+                MapY(forecast.AvailablePercent));
+            var currentPoint = new PointF(
+                _forecastRectangle.Left,
+                MapY(projectedAtHistoryEnd));
+            var endpoint = new PointF(
+                MapForecastX(forecast.DepletesAt, historyEnd),
+                MapY(0));
+            graphics.DrawLines(linePen, [actualPoint, currentPoint, endpoint]);
+            graphics.FillEllipse(endpointBrush, endpoint.X - 4, endpoint.Y - 4, 8, 8);
+
+            var windowLabel = forecast.Window == UsageWindowKind.FiveHour ? "5h" : "Week";
+            var label = $"{windowLabel} → 0%  {FormatForecastTime(forecast.DepletesAt)}";
+            var labelRectangle = new RectangleF(
+                _forecastRectangle.Left + 8,
+                _forecastRectangle.Top + 8 + (index * 19),
+                _forecastRectangle.Width - 16,
+                18);
+            graphics.FillRectangle(labelBackground, labelRectangle);
+            graphics.DrawString(label, labelFont, labelBrush, labelRectangle, labelFormat);
         }
     }
 
@@ -202,7 +351,7 @@ public sealed class UsageHistoryChart : Control
         };
         using var pointBrush = new SolidBrush(color);
         var segment = new List<PointF>();
-        var showSamplePoints = samples.Count <= _plotRectangle.Width / 6f;
+        var showSamplePoints = samples.Count <= _historyRectangle.Width / 6f;
 
         foreach (var sample in samples)
         {
@@ -280,7 +429,15 @@ public sealed class UsageHistoryChart : Control
     private float MapX(DateTimeOffset timestamp, DateTimeOffset start, DateTimeOffset end)
     {
         var fraction = (timestamp - start).TotalSeconds / Math.Max(1d, (end - start).TotalSeconds);
-        return _plotRectangle.Left + ((float)Math.Clamp(fraction, 0d, 1d) * _plotRectangle.Width);
+        return _historyRectangle.Left + ((float)Math.Clamp(fraction, 0d, 1d) * _historyRectangle.Width);
+    }
+
+    private float MapForecastX(DateTimeOffset timestamp, DateTimeOffset start)
+    {
+        var fraction = (timestamp - start).TotalSeconds
+            / Math.Max(1d, (_forecastEnd!.Value - start).TotalSeconds);
+        return _forecastRectangle.Left
+            + ((float)Math.Clamp(fraction, 0d, 1d) * _forecastRectangle.Width);
     }
 
     private float MapY(double value)
@@ -298,11 +455,27 @@ public sealed class UsageHistoryChart : Control
             : timestamp.ToString("MMM d");
     }
 
+    private static string FormatForecastAxisTime(DateTimeOffset timestamp)
+    {
+        var local = timestamp.ToLocalTime();
+        return local.Date == DateTime.Today
+            ? local.ToString("h:mm tt")
+            : local.ToString("ddd h tt");
+    }
+
+    private static string FormatForecastTime(DateTimeOffset timestamp)
+    {
+        var local = timestamp.ToLocalTime();
+        return local.Date == DateTime.Today
+            ? local.ToString("h:mm tt")
+            : local.ToString("ddd h:mm tt");
+    }
+
     private HoverPoint? HitTestPoint(Point location, DateTimeOffset start, DateTimeOffset end)
     {
         const float hitRadius = 9f;
         var position = Math.Clamp(
-            (location.X - _plotRectangle.Left) / _plotRectangle.Width,
+            (location.X - _historyRectangle.Left) / _historyRectangle.Width,
             0f,
             1f);
         var target = start + TimeSpan.FromTicks((long)((end - start).Ticks * position));
@@ -465,12 +638,27 @@ public sealed class UsageHistoryChart : Control
         }
     }
 
-    private static void DrawLegendLine(Graphics graphics, Color color, float x, float y)
+    private static float DrawLineLegend(
+        Graphics graphics,
+        Font font,
+        Brush textBrush,
+        float x,
+        string text,
+        Color color,
+        bool dashed = false)
+    {
+        DrawLegendLine(graphics, color, x, 24, dashed);
+        graphics.DrawString(text, font, textBrush, x + 20, 15);
+        return x + 20 + graphics.MeasureString(text, font).Width + 20;
+    }
+
+    private static void DrawLegendLine(Graphics graphics, Color color, float x, float y, bool dashed)
     {
         using var pen = new Pen(color, 2.25f)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
+            DashStyle = dashed ? DashStyle.Dash : DashStyle.Solid,
         };
         graphics.DrawLine(pen, x, y, x + 13, y);
     }

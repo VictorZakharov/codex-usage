@@ -26,6 +26,9 @@ internal static class Program
             CredentialParserReadsSnakeAndCamelCase();
             FormattingProducesUsefulLabels();
             HistoryDetectsRestoredQuota();
+            HistoryForecastUsesRateSinceReset();
+            HistoryForecastHandlesSafeAndFlatRates();
+            HistoryForecastUsesWeeklyWindow();
             HistoryStoreCompactsAndReloadsSamples();
             PopupLayoutSurvivesDpiChange();
 
@@ -244,6 +247,56 @@ internal static class Program
         Equal(UsageWindowKind.Weekly, events[1].Window, "weekly restore window");
     }
 
+    private static void HistoryForecastUsesRateSinceReset()
+    {
+        var windowStart = new DateTimeOffset(2026, 8, 13, 12, 0, 0, TimeSpan.Zero);
+        var resetAt = windowStart.AddHours(5);
+        var samples = new[]
+        {
+            new UsageHistorySample(windowStart.AddMinutes(30), 92, null, resetAt, null),
+            new UsageHistorySample(windowStart.AddHours(1), 80, null, resetAt, null),
+            new UsageHistorySample(windowStart.AddHours(2), 50, null, resetAt, null),
+        };
+
+        var forecast = UsageHistoryAnalysis.ForecastDepletion(samples, UsageWindowKind.FiveHour);
+        NotNull(forecast, "primary depletion forecast");
+        Equal(windowStart, forecast!.WindowStartedAt, "primary forecast window start");
+        Equal(25d, forecast.ConsumedPercentPerHour, "primary forecast rate since reset");
+        Equal(windowStart.AddHours(4), forecast.DepletesAt, "primary forecast depletion time");
+        Equal(true, forecast.ReachesZeroBeforeReset, "primary forecast before reset");
+    }
+
+    private static void HistoryForecastHandlesSafeAndFlatRates()
+    {
+        var windowStart = new DateTimeOffset(2026, 8, 13, 12, 0, 0, TimeSpan.Zero);
+        var resetAt = windowStart.AddHours(5);
+        var safe = UsageHistoryAnalysis.ForecastDepletion(
+            [new UsageHistorySample(windowStart.AddHours(2), 80, null, resetAt, null)],
+            UsageWindowKind.FiveHour);
+        var flat = UsageHistoryAnalysis.ForecastDepletion(
+            [new UsageHistorySample(windowStart.AddHours(2), 100, null, resetAt, null)],
+            UsageWindowKind.FiveHour);
+
+        NotNull(safe, "safe depletion forecast");
+        Equal(windowStart.AddHours(10), safe!.DepletesAt, "safe forecast depletion time");
+        Equal(false, safe.ReachesZeroBeforeReset, "safe forecast after reset");
+        Equal<UsageDepletionForecast?>(null, flat, "flat usage has no forecast");
+    }
+
+    private static void HistoryForecastUsesWeeklyWindow()
+    {
+        var windowStart = new DateTimeOffset(2026, 8, 6, 12, 0, 0, TimeSpan.Zero);
+        var resetAt = windowStart.AddDays(7);
+        var forecast = UsageHistoryAnalysis.ForecastDepletion(
+            [new UsageHistorySample(windowStart.AddDays(2), null, 50, null, resetAt)],
+            UsageWindowKind.Weekly);
+
+        NotNull(forecast, "weekly depletion forecast");
+        Equal(windowStart, forecast!.WindowStartedAt, "weekly forecast window start");
+        Equal(windowStart.AddDays(4), forecast.DepletesAt, "weekly forecast depletion time");
+        Equal(true, forecast.ReachesZeroBeforeReset, "weekly forecast before reset");
+    }
+
     private static void HistoryStoreCompactsAndReloadsSamples()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"CodexUsage.Tests.{Guid.NewGuid():N}");
@@ -324,6 +377,15 @@ internal static class Program
         if (!actual.Contains(expected, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"{name}: expected '{actual}' to contain '{expected}'.");
+        }
+    }
+
+    private static void NotNull<T>(T? value, string name)
+    {
+        _assertions++;
+        if (value is null)
+        {
+            throw new InvalidOperationException($"{name}: expected a value.");
         }
     }
 }

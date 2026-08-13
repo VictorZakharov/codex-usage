@@ -38,7 +38,7 @@ public sealed class HistoryForm : Form
         _titleLabel.Font = new Font("Segoe UI", 17f, FontStyle.Bold);
         _titleLabel.AutoSize = false;
 
-        _subtitleLabel.Text = "Downward movement is quota consumed; ▲ marks availability restored or reset.";
+        _subtitleLabel.Text = "▲ marks a reset; dashed red projects zero when the average pace would exhaust quota before reset.";
         _subtitleLabel.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
         _subtitleLabel.AutoEllipsis = true;
 

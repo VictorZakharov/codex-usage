@@ -8,7 +8,7 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 
 - Supersampled, anti-aliased system-tray meter with an original six-lobed contour showing the least available Codex quota window; a fresh window is `100` and fully filled.
 - Compact popup with available percentages for the 5-hour and weekly windows, reset countdowns, plan, and credits when available.
-- Persistent 24-hour, 7-day, 30-day, and 90-day history charts, with per-point hover details, reset markers, and a depletion forecast when the average usage since reset would exhaust quota before the next reset, opened from the tray's right-click menu.
+- Persistent 24-hour, 7-day, 30-day, and 90-day history charts, with per-point hover details, reset markers, and a depletion forecast plus its lead time when the average usage since reset would exhaust quota before the next reset, opened from the tray's right-click menu.
 - Support for model-specific Codex limits returned by the service.
 - Manual refresh plus configurable 1, 2, 5, 15, or 30 minute polling.
 - Optional Windows notifications when available quota drops to 30%, 20%, 10%, or 0%.

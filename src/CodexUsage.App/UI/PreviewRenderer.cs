@@ -64,7 +64,9 @@ internal static class PreviewRenderer
                         primaryAvailable,
                         Math.Clamp(weeklyAvailable, 0, 100),
                         recordedAt.AddHours(5 - (index % 5)),
-                        start.AddDays(index >= 96 ? 11 : 7));
+                        start.AddDays(index >= 96 ? 11 : 7),
+                        TimeSpan.FromHours(5),
+                        TimeSpan.FromDays(7));
                 })
                 .ToArray();
 

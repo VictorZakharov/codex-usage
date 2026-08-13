@@ -1,4 +1,5 @@
 using CodexUsage.App.Settings;
+using CodexUsage.Formatting;
 using CodexUsage.History;
 
 namespace CodexUsage.App.UI;
@@ -92,9 +93,21 @@ public sealed class HistoryForm : Form
         }
 
         var latest = _samples[^1];
+        var primaryLabel = FormatWindowLabel(latest.PrimaryDuration, "Primary");
+        var secondaryLabel = FormatWindowLabel(latest.SecondaryDuration, "Secondary");
+        var latestValues = new List<string>();
+        if (latest.PrimaryAvailablePercent is not null)
+        {
+            latestValues.Add($"{primaryLabel} {FormatAvailability(latest.PrimaryAvailablePercent)}");
+        }
+
+        if (latest.SecondaryAvailablePercent is not null)
+        {
+            latestValues.Add($"{secondaryLabel} {FormatAvailability(latest.SecondaryAvailablePercent)}");
+        }
+
         _statusLabel.Text = $"{_samples.Count:N0} samples since {FormatStart(_samples[0].RecordedAt)}  ·  "
-            + $"Latest: 5-hour {FormatAvailability(latest.PrimaryAvailablePercent)}  ·  "
-            + $"Weekly {FormatAvailability(latest.SecondaryAvailablePercent)}";
+            + $"Latest: {(latestValues.Count == 0 ? "unavailable" : string.Join("  ·  ", latestValues))}";
     }
 
     public void ApplyTheme(ThemeMode mode)
@@ -154,6 +167,15 @@ public sealed class HistoryForm : Form
 
     private static string FormatAvailability(double? value)
         => value is null ? "—" : $"{value:0.#}%";
+
+    private static string FormatWindowLabel(TimeSpan? duration, string fallback)
+    {
+        const string suffix = " limit";
+        var label = UsageText.WindowLabel(duration, fallback + suffix);
+        return label.EndsWith(suffix, StringComparison.Ordinal)
+            ? label[..^suffix.Length]
+            : label;
+    }
 
     private static string FormatStart(DateTimeOffset timestamp)
         => timestamp.ToLocalTime().ToString("MMM d, yyyy");

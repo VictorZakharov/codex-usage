@@ -28,8 +28,10 @@ internal static class Program
             HistoryDetectsRestoredQuota();
             HistoryForecastUsesRateSinceReset();
             HistoryForecastHandlesSafeAndFlatRates();
-            HistoryForecastUsesWeeklyWindow();
+            HistoryForecastUsesReportedDuration();
+            HistoryFormUsesReportedWindowLabel();
             HistoryStoreCompactsAndReloadsSamples();
+            HistoryStoreUpgradesLegacySamplesWithDuration();
             PopupLayoutSurvivesDpiChange();
 
             if (args.Contains("--live", StringComparer.OrdinalIgnoreCase))
@@ -241,10 +243,10 @@ internal static class Program
 
         var events = UsageHistoryAnalysis.DetectRestoreEvents(samples);
         Equal(2, events.Count, "restore event count");
-        Equal(UsageWindowKind.FiveHour, events[0].Window, "primary restore window");
+        Equal(UsageWindowKind.Primary, events[0].Window, "primary restore window");
         Equal(38d, events[0].PreviousAvailablePercent, "primary restore previous value");
         Equal(98d, events[0].AvailablePercent, "primary restore current value");
-        Equal(UsageWindowKind.Weekly, events[1].Window, "weekly restore window");
+        Equal(UsageWindowKind.Secondary, events[1].Window, "secondary restore window");
     }
 
     private static void HistoryForecastUsesRateSinceReset()
@@ -253,17 +255,21 @@ internal static class Program
         var resetAt = windowStart.AddHours(5);
         var samples = new[]
         {
-            new UsageHistorySample(windowStart.AddMinutes(30), 92, null, resetAt, null),
-            new UsageHistorySample(windowStart.AddHours(1), 80, null, resetAt, null),
-            new UsageHistorySample(windowStart.AddHours(2), 50, null, resetAt, null),
+            new UsageHistorySample(
+                windowStart.AddMinutes(30), 92, null, resetAt, null, TimeSpan.FromHours(5), null),
+            new UsageHistorySample(
+                windowStart.AddHours(1), 80, null, resetAt, null, TimeSpan.FromHours(5), null),
+            new UsageHistorySample(
+                windowStart.AddHours(2), 50, null, resetAt, null, TimeSpan.FromHours(5), null),
         };
 
-        var forecast = UsageHistoryAnalysis.ForecastDepletion(samples, UsageWindowKind.FiveHour);
+        var forecast = UsageHistoryAnalysis.ForecastDepletion(samples, UsageWindowKind.Primary);
         NotNull(forecast, "primary depletion forecast");
         Equal(windowStart, forecast!.WindowStartedAt, "primary forecast window start");
         Equal(25d, forecast.ConsumedPercentPerHour, "primary forecast rate since reset");
         Equal(windowStart.AddHours(4), forecast.DepletesAt, "primary forecast depletion time");
         Equal(true, forecast.ReachesZeroBeforeReset, "primary forecast before reset");
+        Equal(TimeSpan.FromHours(1), forecast.TimeBeforeReset, "primary forecast lead time");
     }
 
     private static void HistoryForecastHandlesSafeAndFlatRates()
@@ -271,30 +277,60 @@ internal static class Program
         var windowStart = new DateTimeOffset(2026, 8, 13, 12, 0, 0, TimeSpan.Zero);
         var resetAt = windowStart.AddHours(5);
         var safe = UsageHistoryAnalysis.ForecastDepletion(
-            [new UsageHistorySample(windowStart.AddHours(2), 80, null, resetAt, null)],
-            UsageWindowKind.FiveHour);
+            [new UsageHistorySample(
+                windowStart.AddHours(2), 80, null, resetAt, null, TimeSpan.FromHours(5), null)],
+            UsageWindowKind.Primary);
         var flat = UsageHistoryAnalysis.ForecastDepletion(
-            [new UsageHistorySample(windowStart.AddHours(2), 100, null, resetAt, null)],
-            UsageWindowKind.FiveHour);
+            [new UsageHistorySample(
+                windowStart.AddHours(2), 100, null, resetAt, null, TimeSpan.FromHours(5), null)],
+            UsageWindowKind.Primary);
 
         NotNull(safe, "safe depletion forecast");
         Equal(windowStart.AddHours(10), safe!.DepletesAt, "safe forecast depletion time");
         Equal(false, safe.ReachesZeroBeforeReset, "safe forecast after reset");
+        Equal<TimeSpan?>(null, safe.TimeBeforeReset, "safe forecast has no lead time");
         Equal<UsageDepletionForecast?>(null, flat, "flat usage has no forecast");
     }
 
-    private static void HistoryForecastUsesWeeklyWindow()
+    private static void HistoryForecastUsesReportedDuration()
     {
         var windowStart = new DateTimeOffset(2026, 8, 6, 12, 0, 0, TimeSpan.Zero);
         var resetAt = windowStart.AddDays(7);
         var forecast = UsageHistoryAnalysis.ForecastDepletion(
-            [new UsageHistorySample(windowStart.AddDays(2), null, 50, null, resetAt)],
-            UsageWindowKind.Weekly);
+            [new UsageHistorySample(
+                windowStart.AddDays(2), 50, null, resetAt, null, TimeSpan.FromDays(7), null)],
+            UsageWindowKind.Primary);
 
-        NotNull(forecast, "weekly depletion forecast");
-        Equal(windowStart, forecast!.WindowStartedAt, "weekly forecast window start");
-        Equal(windowStart.AddDays(4), forecast.DepletesAt, "weekly forecast depletion time");
-        Equal(true, forecast.ReachesZeroBeforeReset, "weekly forecast before reset");
+        NotNull(forecast, "reported-duration depletion forecast");
+        Equal(TimeSpan.FromDays(7), forecast!.Duration, "forecast duration");
+        Equal(windowStart, forecast.WindowStartedAt, "reported-duration forecast window start");
+        Equal(windowStart.AddDays(4), forecast.DepletesAt, "reported-duration forecast depletion time");
+        Equal(true, forecast.ReachesZeroBeforeReset, "reported-duration forecast before reset");
+        Equal(TimeSpan.FromDays(3), forecast.TimeBeforeReset, "reported-duration forecast lead time");
+    }
+
+    private static void HistoryFormUsesReportedWindowLabel()
+    {
+        var recordedAt = DateTimeOffset.UtcNow;
+        using var form = new HistoryForm(new AppSettings { Theme = ThemeMode.Dark });
+        form.UpdateHistory(
+        [
+            new UsageHistorySample(
+                recordedAt,
+                88,
+                null,
+                recordedAt.AddDays(7),
+                null,
+                TimeSpan.FromDays(7),
+                null),
+        ]);
+
+        var status = form.Controls
+            .OfType<Label>()
+            .Single(label => label.Text.Contains("Latest:", StringComparison.Ordinal))
+            .Text;
+        Contains("Latest: Weekly 88%", status, "history uses reported window label");
+        Equal(false, status.Contains("Secondary", StringComparison.Ordinal), "history hides unavailable window");
     }
 
     private static void HistoryStoreCompactsAndReloadsSamples()
@@ -314,6 +350,8 @@ internal static class Program
             var reloaded = new UsageHistoryStore(filePath).Load();
             Equal(2, reloaded.Count, "history reload skips damaged lines");
             Equal(85d, reloaded[^1].PrimaryAvailablePercent, "history stores availability");
+            Equal(TimeSpan.FromHours(5), reloaded[^1].PrimaryDuration, "history stores primary duration");
+            Equal(TimeSpan.FromDays(7), reloaded[^1].SecondaryDuration, "history stores secondary duration");
         }
         finally
         {
@@ -331,6 +369,49 @@ internal static class Program
             if (Directory.Exists(directory))
             {
                 Directory.Delete(directory);
+            }
+        }
+    }
+
+    private static void HistoryStoreUpgradesLegacySamplesWithDuration()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"CodexUsage.Tests.{Guid.NewGuid():N}");
+        var filePath = Path.Combine(directory, "history.jsonl");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var recordedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+            var primaryReset = recordedAt.AddDays(7);
+            var secondaryReset = recordedAt.AddDays(14);
+            var legacyLine = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                recordedAt,
+                primaryAvailablePercent = 90,
+                secondaryAvailablePercent = 80,
+                primaryResetsAt = primaryReset,
+                secondaryResetsAt = secondaryReset,
+            });
+            File.WriteAllText(filePath, legacyLine + Environment.NewLine);
+
+            var store = new UsageHistoryStore(filePath);
+            var upgraded = store.Record(new UsageSnapshot(
+                "pro",
+                new RateLimitWindow(10, primaryReset, TimeSpan.FromDays(7)),
+                new RateLimitWindow(20, secondaryReset, TimeSpan.FromDays(14)),
+                null,
+                [],
+                recordedAt.AddMinutes(1)));
+
+            Equal(2, upgraded.Count, "history adds duration upgrade sample");
+            Equal<TimeSpan?>(null, upgraded[0].PrimaryDuration, "legacy duration remains optional");
+            Equal(TimeSpan.FromDays(7), upgraded[1].PrimaryDuration, "history upgrades primary duration");
+            Equal(TimeSpan.FromDays(14), upgraded[1].SecondaryDuration, "history upgrades secondary duration");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
             }
         }
     }

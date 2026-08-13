@@ -4,8 +4,8 @@ namespace CodexUsage.History;
 
 public enum UsageWindowKind
 {
-    FiveHour,
-    Weekly,
+    Primary,
+    Secondary,
 }
 
 public sealed record UsageHistorySample(
@@ -13,7 +13,9 @@ public sealed record UsageHistorySample(
     double? PrimaryAvailablePercent,
     double? SecondaryAvailablePercent,
     DateTimeOffset? PrimaryResetsAt,
-    DateTimeOffset? SecondaryResetsAt)
+    DateTimeOffset? SecondaryResetsAt,
+    TimeSpan? PrimaryDuration = null,
+    TimeSpan? SecondaryDuration = null)
 {
     public static UsageHistorySample FromSnapshot(UsageSnapshot snapshot)
         => new(
@@ -21,7 +23,33 @@ public sealed record UsageHistorySample(
             snapshot.Primary?.AvailablePercent,
             snapshot.Secondary?.AvailablePercent,
             snapshot.Primary?.ResetsAt,
-            snapshot.Secondary?.ResetsAt);
+            snapshot.Secondary?.ResetsAt,
+            snapshot.Primary?.Duration,
+            snapshot.Secondary?.Duration);
+
+    public double? GetAvailablePercent(UsageWindowKind window)
+        => window switch
+        {
+            UsageWindowKind.Primary => PrimaryAvailablePercent,
+            UsageWindowKind.Secondary => SecondaryAvailablePercent,
+            _ => throw new ArgumentOutOfRangeException(nameof(window), window, null),
+        };
+
+    public DateTimeOffset? GetResetsAt(UsageWindowKind window)
+        => window switch
+        {
+            UsageWindowKind.Primary => PrimaryResetsAt,
+            UsageWindowKind.Secondary => SecondaryResetsAt,
+            _ => throw new ArgumentOutOfRangeException(nameof(window), window, null),
+        };
+
+    public TimeSpan? GetDuration(UsageWindowKind window)
+        => window switch
+        {
+            UsageWindowKind.Primary => PrimaryDuration,
+            UsageWindowKind.Secondary => SecondaryDuration,
+            _ => throw new ArgumentOutOfRangeException(nameof(window), window, null),
+        };
 }
 
 public sealed record UsageRestoreEvent(
@@ -35,11 +63,15 @@ public sealed record UsageDepletionForecast(
     DateTimeOffset WindowStartedAt,
     DateTimeOffset RecordedAt,
     DateTimeOffset ResetsAt,
+    TimeSpan Duration,
     double AvailablePercent,
     double ConsumedPercentPerHour,
     DateTimeOffset DepletesAt)
 {
     public bool ReachesZeroBeforeReset => DepletesAt <= ResetsAt;
+
+    public TimeSpan? TimeBeforeReset
+        => ReachesZeroBeforeReset ? ResetsAt - DepletesAt : null;
 }
 
 public static class UsageHistoryAnalysis
@@ -61,13 +93,13 @@ public static class UsageHistoryAnalysis
                 ordered[index - 1].PrimaryAvailablePercent,
                 ordered[index].PrimaryAvailablePercent,
                 ordered[index].RecordedAt,
-                UsageWindowKind.FiveHour);
+                UsageWindowKind.Primary);
             AddRestoreEvent(
                 events,
                 ordered[index - 1].SecondaryAvailablePercent,
                 ordered[index].SecondaryAvailablePercent,
                 ordered[index].RecordedAt,
-                UsageWindowKind.Weekly);
+                UsageWindowKind.Secondary);
         }
 
         return events;
@@ -83,25 +115,16 @@ public static class UsageHistoryAnalysis
             return null;
         }
 
-        var (available, resetsAt, duration) = window switch
-        {
-            UsageWindowKind.FiveHour => (
-                latest.PrimaryAvailablePercent,
-                latest.PrimaryResetsAt,
-                TimeSpan.FromHours(5)),
-            UsageWindowKind.Weekly => (
-                latest.SecondaryAvailablePercent,
-                latest.SecondaryResetsAt,
-                TimeSpan.FromDays(7)),
-            _ => throw new ArgumentOutOfRangeException(nameof(window), window, null),
-        };
-        if (available is null || resetsAt is null)
+        var available = latest.GetAvailablePercent(window);
+        var resetsAt = latest.GetResetsAt(window);
+        var duration = latest.GetDuration(window);
+        if (available is null || resetsAt is null || duration is null || duration <= TimeSpan.Zero)
         {
             return null;
         }
 
-        // Each window begins fully available; its next reset minus its duration is the last reset.
-        var windowStartedAt = resetsAt.Value - duration;
+        // Each window begins fully available; its next reset minus its reported duration is the last reset.
+        var windowStartedAt = resetsAt.Value - duration.Value;
         var elapsed = latest.RecordedAt - windowStartedAt;
         var availablePercent = Math.Clamp(available.Value, 0d, 100d);
         var consumedPercent = 100d - availablePercent;
@@ -123,6 +146,7 @@ public static class UsageHistoryAnalysis
             windowStartedAt,
             latest.RecordedAt,
             resetsAt.Value,
+            duration.Value,
             availablePercent,
             ratePerHour,
             windowStartedAt.AddHours(hoursToDepletion));

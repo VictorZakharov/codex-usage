@@ -134,7 +134,9 @@ public sealed class UsageHistoryStore
             || ValueChanged(previous.PrimaryAvailablePercent, sample.PrimaryAvailablePercent)
             || ValueChanged(previous.SecondaryAvailablePercent, sample.SecondaryAvailablePercent)
             || previous.PrimaryResetsAt != sample.PrimaryResetsAt
-            || previous.SecondaryResetsAt != sample.SecondaryResetsAt;
+            || previous.SecondaryResetsAt != sample.SecondaryResetsAt
+            || previous.PrimaryDuration != sample.PrimaryDuration
+            || previous.SecondaryDuration != sample.SecondaryDuration;
     }
 
     private bool Prune(DateTimeOffset referenceTime)
@@ -206,10 +208,15 @@ public sealed class UsageHistoryStore
         {
             PrimaryAvailablePercent = Clamp(sample.PrimaryAvailablePercent),
             SecondaryAvailablePercent = Clamp(sample.SecondaryAvailablePercent),
+            PrimaryDuration = NormalizeDuration(sample.PrimaryDuration),
+            SecondaryDuration = NormalizeDuration(sample.SecondaryDuration),
         };
 
     private static double? Clamp(double? value)
         => value is null || !double.IsFinite(value.Value)
             ? null
             : Math.Clamp(value.Value, 0, 100);
+
+    private static TimeSpan? NormalizeDuration(TimeSpan? duration)
+        => duration is { } value && value > TimeSpan.Zero ? value : null;
 }

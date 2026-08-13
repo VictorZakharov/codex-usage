@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using CodexUsage.Formatting;
 using CodexUsage.History;
 
 namespace CodexUsage.App.UI;
@@ -168,12 +169,28 @@ public sealed class UsageHistoryChart : Control
         var secondaryColor = _palette.IsDark
             ? Color.FromArgb(185, 151, 255)
             : Color.FromArgb(115, 78, 185);
+        var latest = _samples.LastOrDefault();
+        var primaryLabel = FormatWindowLegendLabel(latest?.PrimaryDuration, "Primary");
+        var secondaryLabel = FormatWindowLegendLabel(latest?.SecondaryDuration, "Secondary");
 
-        var x = DrawLineLegend(graphics, legendFont, textBrush, 18, "5-hour", primaryColor);
-        x = DrawLineLegend(graphics, legendFont, textBrush, x, "Weekly", secondaryColor);
-        DrawUpwardTriangle(graphics, _palette.Success, new PointF(x + 5, 24), 5f);
-        graphics.DrawString("Reset", legendFont, textBrush, x + 16, 15);
-        x += 16 + graphics.MeasureString("Reset", legendFont).Width + 20;
+        var x = 18f;
+        if (_samples.Any(sample => sample.PrimaryAvailablePercent is not null))
+        {
+            x = DrawLineLegend(graphics, legendFont, textBrush, x, primaryLabel, primaryColor);
+        }
+
+        if (_samples.Any(sample => sample.SecondaryAvailablePercent is not null))
+        {
+            x = DrawLineLegend(graphics, legendFont, textBrush, x, secondaryLabel, secondaryColor);
+        }
+
+        if (_restoreEvents.Count > 0)
+        {
+            DrawUpwardTriangle(graphics, _palette.Success, new PointF(x + 5, 24), 5f);
+            graphics.DrawString("Reset", legendFont, textBrush, x + 16, 15);
+            x += 16 + graphics.MeasureString("Reset", legendFont).Width + 20;
+        }
+
         if (_depletionForecasts.Count > 0)
         {
             DrawLineLegend(
@@ -295,7 +312,9 @@ public sealed class UsageHistoryChart : Control
         };
         using var endpointBrush = new SolidBrush(_palette.Danger);
         using var labelFont = new Font(Font.FontFamily, 8f, FontStyle.Bold);
+        using var hintFont = new Font(Font.FontFamily, 7.5f, FontStyle.Regular);
         using var labelBrush = new SolidBrush(_palette.Danger);
+        using var hintBrush = new SolidBrush(_palette.SecondaryText);
         using var labelBackground = new SolidBrush(_palette.Card);
         using var labelFormat = new StringFormat
         {
@@ -323,15 +342,31 @@ public sealed class UsageHistoryChart : Control
             graphics.DrawLines(linePen, [actualPoint, currentPoint, endpoint]);
             graphics.FillEllipse(endpointBrush, endpoint.X - 4, endpoint.Y - 4, 8, 8);
 
-            var windowLabel = forecast.Window == UsageWindowKind.FiveHour ? "5h" : "Week";
+            var windowLabel = FormatForecastWindowLabel(forecast.Duration);
             var label = $"{windowLabel} → 0%  {FormatForecastTime(forecast.DepletesAt)}";
-            var labelRectangle = new RectangleF(
+            var blockRectangle = new RectangleF(
                 _forecastRectangle.Left + 8,
-                _forecastRectangle.Top + 8 + (index * 19),
+                _forecastRectangle.Top + 7 + (index * 39),
                 _forecastRectangle.Width - 16,
-                18);
-            graphics.FillRectangle(labelBackground, labelRectangle);
+                36);
+            var labelRectangle = new RectangleF(
+                blockRectangle.Left,
+                blockRectangle.Top + 1,
+                blockRectangle.Width,
+                17);
+            var hintRectangle = new RectangleF(
+                blockRectangle.Left,
+                blockRectangle.Top + 18,
+                blockRectangle.Width,
+                16);
+            graphics.FillRectangle(labelBackground, blockRectangle);
             graphics.DrawString(label, labelFont, labelBrush, labelRectangle, labelFormat);
+            graphics.DrawString(
+                FormatResetLeadTime(forecast.TimeBeforeReset!.Value),
+                hintFont,
+                hintBrush,
+                hintRectangle,
+                labelFormat);
         }
     }
 
@@ -385,7 +420,7 @@ public sealed class UsageHistoryChart : Control
                 continue;
             }
 
-            var color = restore.Window == UsageWindowKind.FiveHour ? primaryColor : secondaryColor;
+            var color = restore.Window == UsageWindowKind.Primary ? primaryColor : secondaryColor;
             var point = new PointF(
                 MapX(restore.RecordedAt, start, end),
                 MapY(restore.AvailablePercent));
@@ -455,6 +490,48 @@ public sealed class UsageHistoryChart : Control
             : timestamp.ToString("MMM d");
     }
 
+    private static string FormatWindowLegendLabel(TimeSpan? duration, string fallback)
+    {
+        const string suffix = " limit";
+        var label = UsageText.WindowLabel(duration, fallback + suffix);
+        return label.EndsWith(suffix, StringComparison.Ordinal)
+            ? label[..^suffix.Length]
+            : label;
+    }
+
+    private static string FormatForecastWindowLabel(TimeSpan duration)
+    {
+        if (duration.TotalHours is >= 4.5 and <= 5.5)
+        {
+            return "5h";
+        }
+
+        if (duration.TotalDays is >= 6.5 and <= 7.5)
+        {
+            return "Week";
+        }
+
+        return duration.TotalDays >= 1
+            ? $"{Math.Round(duration.TotalDays):0}d"
+            : $"{Math.Round(duration.TotalHours):0}h";
+    }
+
+    private static string FormatResetLeadTime(TimeSpan leadTime)
+    {
+        var totalMinutes = Math.Max(1, (int)Math.Floor(leadTime.TotalMinutes));
+        var days = totalMinutes / (24 * 60);
+        var hours = (totalMinutes / 60) % 24;
+        var minutes = totalMinutes % 60;
+        if (days > 0)
+        {
+            return $"{days}d {hours}h before reset";
+        }
+
+        return hours > 0
+            ? $"{hours}h {minutes}m before reset"
+            : $"{minutes}m before reset";
+    }
+
     private static string FormatForecastAxisTime(DateTimeOffset timestamp)
     {
         var local = timestamp.ToLocalTime();
@@ -499,8 +576,8 @@ public sealed class UsageHistoryChart : Control
                 continue;
             }
 
-            TestPoint(sample, UsageWindowKind.FiveHour, sample.PrimaryAvailablePercent, x);
-            TestPoint(sample, UsageWindowKind.Weekly, sample.SecondaryAvailablePercent, x);
+            TestPoint(sample, UsageWindowKind.Primary, sample.PrimaryAvailablePercent, x);
+            TestPoint(sample, UsageWindowKind.Secondary, sample.SecondaryAvailablePercent, x);
         }
 
         return closest;
@@ -564,7 +641,9 @@ public sealed class UsageHistoryChart : Control
 
     private string BuildToolTip(HoverPoint point)
     {
-        var windowName = point.Window == UsageWindowKind.FiveHour ? "5-hour limit" : "Weekly limit";
+        var windowName = UsageText.WindowLabel(
+            point.Sample.GetDuration(point.Window),
+            point.Window == UsageWindowKind.Primary ? "Primary limit" : "Secondary limit");
         var restored = _restoreEvents.Any(item =>
             item.RecordedAt == point.Sample.RecordedAt && item.Window == point.Window);
         var suffix = restored ? "\nAvailability restored / reset" : string.Empty;
@@ -587,7 +666,7 @@ public sealed class UsageHistoryChart : Control
             return;
         }
 
-        var color = _hoveredPoint.Window == UsageWindowKind.FiveHour ? primaryColor : secondaryColor;
+        var color = _hoveredPoint.Window == UsageWindowKind.Primary ? primaryColor : secondaryColor;
         var point = new PointF(
             MapX(_hoveredPoint.Sample.RecordedAt, start, end),
             MapY(_hoveredPoint.AvailablePercent));

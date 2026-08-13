@@ -568,8 +568,15 @@ internal static class Program
         Equal(true, toggle.Visible, "off-hour toggle shown for learned schedule");
         Equal(true, chart.ShowOffHourSegments, "off-hour flats shown by default");
         Contains("pauses", subtitle.Text, "history subtitle explains off hours");
+        var expandedForecastSpan = chart.DisplayedForecastSpan;
         toggle.Checked = false;
         Equal(false, chart.ShowOffHourSegments, "off-hour toggle hides flat segments");
+        Equal(
+            true,
+            chart.DisplayedForecastSpan < expandedForecastSpan,
+            "off-hour toggle collapses flat intervals on x axis");
+        using var collapsedBitmap = new Bitmap(chart.Width, chart.Height);
+        chart.DrawToBitmap(collapsedBitmap, new Rectangle(Point.Empty, collapsedBitmap.Size));
         form.Hide();
     }
 

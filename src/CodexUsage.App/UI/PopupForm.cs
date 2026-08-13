@@ -1,5 +1,4 @@
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 using CodexUsage.App.Settings;
 using CodexUsage.Formatting;
 using CodexUsage.Models;
@@ -8,6 +7,9 @@ namespace CodexUsage.App.UI;
 
 public sealed class PopupForm : Form
 {
+    private const int LogicalDpi = 96;
+    private const int LogicalWidth = 382;
+
     private readonly Label _titleLabel = new();
     private readonly Label _planLabel = new();
     private readonly Label _accountLabel = new();
@@ -32,8 +34,9 @@ public sealed class PopupForm : Form
     public PopupForm(AppSettings settings)
     {
         _palette = ThemePalette.Resolve(settings.Theme);
+        AutoScaleDimensions = new SizeF(LogicalDpi, LogicalDpi);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(382, 364);
+        ClientSize = new Size(LogicalWidth, 364);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -144,36 +147,35 @@ public sealed class PopupForm : Form
     {
         var cursor = Cursor.Position;
         var screen = Screen.FromPoint(cursor);
-        var work = screen.WorkingArea;
-        var bounds = screen.Bounds;
-        const int gap = 8;
-
-        var x = Math.Clamp(cursor.X - Width + 24, work.Left + gap, work.Right - Width - gap);
-        int y;
-
-        if (cursor.Y >= work.Bottom || Math.Abs(cursor.Y - bounds.Bottom) < 64)
-        {
-            y = work.Bottom - Height - gap;
-        }
-        else if (cursor.Y <= work.Top || Math.Abs(cursor.Y - bounds.Top) < 64)
-        {
-            y = work.Top + gap;
-        }
-        else
-        {
-            y = Math.Clamp(cursor.Y - Height, work.Top + gap, work.Bottom - Height - gap);
-        }
-
-        Location = new Point(x, y);
+        PositionNearTray(cursor, screen);
         Show();
+
+        // Creating or moving the window can switch it to the tray monitor's DPI.
+        // Anchor it again after WinForms has applied that transition and resized it.
+        PositionNearTray(cursor, screen);
         Activate();
         BringToFront();
+    }
+
+    protected override void OnShown(EventArgs eventArgs)
+    {
+        base.OnShown(eventArgs);
+        LayoutContent();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs eventArgs)
+    {
+        base.OnDpiChanged(eventArgs);
+        LayoutContent();
+        Invalidate(invalidateChildren: true);
     }
 
     protected override void OnResize(EventArgs eventArgs)
     {
         base.OnResize(eventArgs);
-        using var path = RoundedRectangle(new Rectangle(0, 0, Width, Height), 14);
+        using var path = RoundedRectangle(
+            new Rectangle(0, 0, Width, Height),
+            LogicalToDeviceUnits(14));
         var region = new Region(path);
         var previous = Region;
         Region = region;
@@ -185,8 +187,41 @@ public sealed class PopupForm : Form
         base.OnPaint(eventArgs);
         eventArgs.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var pen = new Pen(_palette.Border);
-        using var path = RoundedRectangle(new Rectangle(0, 0, Width - 1, Height - 1), 14);
+        using var path = RoundedRectangle(
+            new Rectangle(0, 0, Width - 1, Height - 1),
+            LogicalToDeviceUnits(14));
         eventArgs.Graphics.DrawPath(pen, path);
+    }
+
+    private void PositionNearTray(Point cursor, Screen screen)
+    {
+        var work = screen.WorkingArea;
+        var bounds = screen.Bounds;
+        var gap = LogicalToDeviceUnits(8);
+        var horizontalOffset = LogicalToDeviceUnits(24);
+        var edgeThreshold = LogicalToDeviceUnits(64);
+        var minimumX = work.Left + gap;
+        var maximumX = Math.Max(minimumX, work.Right - Width - gap);
+        var minimumY = work.Top + gap;
+        var maximumY = Math.Max(minimumY, work.Bottom - Height - gap);
+
+        var x = Math.Clamp(cursor.X - Width + horizontalOffset, minimumX, maximumX);
+        int y;
+
+        if (cursor.Y >= work.Bottom || Math.Abs(cursor.Y - bounds.Bottom) < edgeThreshold)
+        {
+            y = maximumY;
+        }
+        else if (cursor.Y <= work.Top || Math.Abs(cursor.Y - bounds.Top) < edgeThreshold)
+        {
+            y = minimumY;
+        }
+        else
+        {
+            y = Math.Clamp(cursor.Y - Height, minimumY, maximumY);
+        }
+
+        Location = new Point(x, y);
     }
 
     private void RefreshDisplayText()
@@ -257,39 +292,50 @@ public sealed class PopupForm : Form
     private void LayoutContent()
     {
         const int left = 18;
-        var contentWidth = ClientSize.Width - (left * 2);
-        _titleLabel.SetBounds(left, 15, 220, 28);
-        _planLabel.SetBounds(ClientSize.Width - 112, 18, 92, 24);
-        _accountLabel.SetBounds(left, 46, contentWidth, 21);
+        const int contentWidth = LogicalWidth - (left * 2);
+        SetLogicalBounds(_titleLabel, left, 15, 220, 28);
+        SetLogicalBounds(_planLabel, LogicalWidth - 112, 18, 92, 24);
+        SetLogicalBounds(_accountLabel, left, 46, contentWidth, 21);
 
         var y = 77;
-        _primaryMeter.SetBounds(left, y, contentWidth, 78);
+        SetLogicalBounds(_primaryMeter, left, y, contentWidth, 78);
         y += 86;
-        _secondaryMeter.SetBounds(left, y, contentWidth, 78);
+        SetLogicalBounds(_secondaryMeter, left, y, contentWidth, 78);
         y += 86;
 
         if (_showAdditional)
         {
-            _additionalMeter.SetBounds(left, y, contentWidth, 78);
+            SetLogicalBounds(_additionalMeter, left, y, contentWidth, 78);
             y += 86;
         }
 
         if (_showCredits)
         {
-            _creditsLabel.SetBounds(left, y, contentWidth, 24);
+            SetLogicalBounds(_creditsLabel, left, y, contentWidth, 24);
             y += 28;
         }
 
         if (_showMessage)
         {
-            _messageLabel.SetBounds(left, y, contentWidth, 34);
+            SetLogicalBounds(_messageLabel, left, y, contentWidth, 34);
             y += 38;
         }
 
-        _updatedLabel.SetBounds(left, y + 4, 160, 25);
-        _settingsButton.SetBounds(ClientSize.Width - 180, y, 78, 30);
-        _refreshButton.SetBounds(ClientSize.Width - 96, y, 78, 30);
-        ClientSize = new Size(ClientSize.Width, y + 46);
+        SetLogicalBounds(_updatedLabel, left, y + 4, 160, 25);
+        SetLogicalBounds(_settingsButton, LogicalWidth - 180, y, 78, 30);
+        SetLogicalBounds(_refreshButton, LogicalWidth - 96, y, 78, 30);
+        ClientSize = new Size(
+            LogicalToDeviceUnits(LogicalWidth),
+            LogicalToDeviceUnits(y + 46));
+    }
+
+    private void SetLogicalBounds(Control control, int x, int y, int width, int height)
+    {
+        control.SetBounds(
+            LogicalToDeviceUnits(x),
+            LogicalToDeviceUnits(y),
+            LogicalToDeviceUnits(width),
+            LogicalToDeviceUnits(height));
     }
 
     private void ConfigureLabel(Label label, float size, FontStyle style)

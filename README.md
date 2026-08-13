@@ -8,7 +8,9 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 
 - Supersampled, anti-aliased system-tray meter with an original six-lobed contour showing the least available Codex quota window; a fresh window is `100` and fully filled.
 - Compact popup with available percentages for the 5-hour and weekly windows, reset countdowns, plan, and credits when available.
-- Persistent 24-hour, 7-day, 30-day, and 90-day history charts, with per-point hover details and markers for quota restoration or resets, opened from the tray's right-click menu.
+- Persistent 24-hour, 7-day, 30-day, and 90-day history charts, with per-point hover details, reset markers, and a depletion forecast plus its lead time when the average usage since reset would exhaust quota before the next reset, opened from the tray's right-click menu.
+- Activity-aware forecasts learn the local hours when quota has historically decreased and exclude observed off hours from the pace. The checkbox switches between flat off-hour segments on a uniform time axis and an active-time view that collapses those intervals. A gap bounded by equal quota readings is treated as assumed flat time (including overnight); otherwise, the forecast falls back to elapsed time until all 24 clock hours have evidence.
+- Local Codex token totals for the selected chart period, the current primary quota window since reset, and today. They load in the background with a progress indicator; the reader parses only token counter events in local Codex session files, never conversation messages.
 - Support for model-specific Codex limits returned by the service.
 - Manual refresh plus configurable 1, 2, 5, 15, or 30 minute polling.
 - Optional Windows notifications when available quota drops to 30%, 20%, 10%, or 0%.
@@ -24,7 +26,7 @@ It is intentionally Codex-only. There are no provider plugins, browser-cookie im
 
 ### Usage history
 
-<img src="screenshots/usage-history.png" alt="Codex Usage seven-day history graph with a point tooltip" width="754">
+<img src="screenshots/usage-history.png" alt="Codex Usage history graph with learned off hours, flat forecast segments, projected depletion times, and local token totals" width="754">
 
 ## How authentication works
 
@@ -95,6 +97,7 @@ dotnet run --project .\tests\CodexUsage.Tests\CodexUsage.Tests.csproj -- --live
 
 - Settings are stored in `%LOCALAPPDATA%\CodexUsage\settings.json`; no secrets are stored there.
 - Usage history is stored locally in `%LOCALAPPDATA%\CodexUsage\history.jsonl`. Flat duplicate readings are compressed, and history is limited to 90 days and 50,000 samples.
+- Token totals are best-effort sums of the counters emitted in local `%CODEX_HOME%\sessions` and `archived_sessions` files. They include model-processing tokens such as cached context and non-visible output, so they do not map one-to-one to quota percentage and may be unavailable when local session counters are absent.
 - This is an independent, unofficial utility and is not affiliated with or endorsed by OpenAI.
 - Local release builds are unsigned, so Windows SmartScreen may show an unrecognized-app warning. Verify the adjacent SHA-256 file before running a distributed copy.
 - The tray app follows the behavior of CodexBar's OAuth usage source. The underlying ChatGPT usage route is not a public, versioned API and may change; parser and endpoint updates may occasionally be necessary.

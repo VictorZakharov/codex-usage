@@ -6,29 +6,32 @@ namespace CodexUsage.Formatting;
 public static class UsageText
 {
     public static string WindowLabel(RateLimitWindow window, string fallback)
+        => WindowLabel(window.Duration, fallback);
+
+    public static string WindowLabel(TimeSpan? duration, string fallback)
     {
-        if (window.Duration is null)
+        if (duration is null)
         {
             return fallback;
         }
 
-        var duration = window.Duration.Value;
-        if (duration.TotalHours is >= 4.5 and <= 5.5)
+        var value = duration.Value;
+        if (value.TotalHours is >= 4.5 and <= 5.5)
         {
             return "5-hour limit";
         }
 
-        if (duration.TotalDays is >= 6.5 and <= 7.5)
+        if (value.TotalDays is >= 6.5 and <= 7.5)
         {
             return "Weekly limit";
         }
 
-        if (duration.TotalDays >= 1)
+        if (value.TotalDays >= 1)
         {
-            return $"{Math.Round(duration.TotalDays):0}-day limit";
+            return $"{Math.Round(value.TotalDays):0}-day limit";
         }
 
-        return $"{Math.Round(duration.TotalHours):0}-hour limit";
+        return $"{Math.Round(value.TotalHours):0}-hour limit";
     }
 
     public static string ResetDescription(DateTimeOffset? resetsAt, DateTimeOffset now)

@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using CodexUsage.Formatting;
 using CodexUsage.History;
 
 namespace CodexUsage.App.UI;
@@ -15,10 +17,14 @@ public sealed class UsageHistoryChart : Control
 
     private UsageHistorySample[] _samples = [];
     private IReadOnlyList<UsageRestoreEvent> _restoreEvents = [];
+    private IReadOnlyList<UsageDepletionForecast> _depletionForecasts = [];
     private ThemePalette _palette = ThemePalette.Resolve(Settings.ThemeMode.System);
     private TimeSpan _range = TimeSpan.FromDays(7);
     private RectangleF _plotRectangle;
+    private RectangleF _forecastRectangle;
+    private DateTimeOffset? _forecastEnd;
     private HoverPoint? _hoveredPoint;
+    private bool _showOffHourSegments = true;
 
     public UsageHistoryChart()
     {
@@ -28,6 +34,74 @@ public sealed class UsageHistoryChart : Control
         MouseLeave += (_, _) => ClearHover();
     }
 
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool ShowOffHourSegments
+    {
+        get => _showOffHourSegments;
+        set
+        {
+            if (_showOffHourSegments == value)
+            {
+                return;
+            }
+
+            _showOffHourSegments = value;
+            Invalidate();
+        }
+    }
+
+    public bool HasLearnedOffHours
+        => _depletionForecasts.Any(forecast => forecast.ActivitySchedule is not null);
+
+    public bool HasOffHourSegments
+    {
+        get
+        {
+            var timeline = VisibleInterval();
+            var cursor = timeline.HistoryEnd;
+            while (cursor < timeline.End)
+            {
+                var segmentEnd = NextForecastDisplayBoundary(cursor, timeline.End);
+                if (!IsForecastTimeDisplayed(cursor))
+                {
+                    return true;
+                }
+
+                cursor = segmentEnd;
+            }
+
+            return false;
+        }
+    }
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public TimeSpan DisplayedForecastSpan
+    {
+        get
+        {
+            var timeline = VisibleInterval();
+            return DisplayDuration(timeline.HistoryEnd, timeline.End, timeline);
+        }
+    }
+
+    public string? OffHoursDescription
+    {
+        get
+        {
+            var descriptions = _depletionForecasts
+                .Select(forecast => forecast.ActivitySchedule)
+                .OfType<UsageActivitySchedule>()
+                .Select(FormatOffHours)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return descriptions.Length == 0
+                ? null
+                : string.Join(" / ", descriptions);
+        }
+    }
+
     public void SetData(
         IReadOnlyList<UsageHistorySample> samples,
         TimeSpan range,
@@ -35,6 +109,18 @@ public sealed class UsageHistoryChart : Control
     {
         _samples = samples.OrderBy(sample => sample.RecordedAt).ToArray();
         _restoreEvents = UsageHistoryAnalysis.DetectRestoreEvents(_samples);
+        var now = DateTimeOffset.Now;
+        _depletionForecasts = Enum.GetValues<UsageWindowKind>()
+            .Select(window => UsageHistoryAnalysis.ForecastDepletion(_samples, window))
+            .OfType<UsageDepletionForecast>()
+            .Where(forecast => forecast.ReachesZeroBeforeReset
+                && forecast.DepletesAt > now
+                && forecast.ResetsAt > now)
+            .OrderBy(forecast => forecast.DepletesAt)
+            .ToArray();
+        _forecastEnd = _depletionForecasts.Count == 0
+            ? null
+            : _depletionForecasts.Max(forecast => forecast.DepletesAt);
         _range = range;
         _palette = palette;
         BackColor = palette.Card;
@@ -61,8 +147,8 @@ public sealed class UsageHistoryChart : Control
             return;
         }
 
-        var (start, end) = VisibleInterval();
-        var hoveredPoint = HitTestPoint(eventArgs.Location, start, end);
+        var timeline = VisibleInterval();
+        var hoveredPoint = HitTestPoint(eventArgs.Location, timeline);
         if (hoveredPoint is null)
         {
             ClearHover();
@@ -101,12 +187,15 @@ public sealed class UsageHistoryChart : Control
             return;
         }
 
-        _plotRectangle = new RectangleF(54, 52, Width - 76, Height - 96);
+        var legendHeight = OffHoursDescription is null ? 52 : 70;
+        _plotRectangle = new RectangleF(54, legendHeight, Width - 76, Height - legendHeight - 44);
+        var timeline = VisibleInterval();
+        ConfigureForecastRectangle(timeline);
+        DrawForecastBackground(graphics);
         DrawLegend(graphics);
-        DrawGrid(graphics);
 
-        var (start, end) = VisibleInterval();
-        var visibleSamples = VisibleSamples(start, end);
+        DrawGrid(graphics, timeline);
+        var visibleSamples = VisibleSamples(timeline.Start, timeline.HistoryEnd);
         if (visibleSamples.Count == 0)
         {
             DrawEmptyState(graphics, "History starts after the next successful refresh.");
@@ -123,19 +212,18 @@ public sealed class UsageHistoryChart : Control
             visibleSamples,
             sample => sample.PrimaryAvailablePercent,
             primaryColor,
-            start,
-            end);
+            timeline);
         DrawSeries(
             graphics,
             visibleSamples,
             sample => sample.SecondaryAvailablePercent,
             secondaryColor,
-            start,
-            end);
-        DrawRestoreMarkers(graphics, start, end, primaryColor, secondaryColor);
-        DrawHoveredPoint(graphics, start, end, primaryColor, secondaryColor);
+            timeline);
+        DrawRestoreMarkers(graphics, timeline);
+        DrawDepletionForecasts(graphics, timeline);
+        DrawHoveredPoint(graphics, timeline, primaryColor, secondaryColor);
 
-        if (visibleSamples.Count == 1)
+        if (visibleSamples.Count == 1 && _depletionForecasts.Count == 0)
         {
             DrawEmptyState(graphics, "Collecting more samples…");
         }
@@ -149,16 +237,59 @@ public sealed class UsageHistoryChart : Control
         var secondaryColor = _palette.IsDark
             ? Color.FromArgb(185, 151, 255)
             : Color.FromArgb(115, 78, 185);
+        var latest = _samples.LastOrDefault();
+        var primaryLabel = FormatWindowLegendLabel(latest?.PrimaryDuration, "Primary");
+        var secondaryLabel = FormatWindowLegendLabel(latest?.SecondaryDuration, "Secondary");
 
-        DrawLegendLine(graphics, primaryColor, 18, 24);
-        graphics.DrawString("5-hour available", legendFont, textBrush, 38, 15);
-        DrawLegendLine(graphics, secondaryColor, 166, 24);
-        graphics.DrawString("Weekly available", legendFont, textBrush, 186, 15);
-        DrawUpwardTriangle(graphics, _palette.Success, new PointF(327, 24), 5f);
-        graphics.DrawString("Restored / reset", legendFont, textBrush, 339, 15);
+        var x = 18f;
+        if (_samples.Any(sample => sample.PrimaryAvailablePercent is not null))
+        {
+            x = DrawLineLegend(graphics, legendFont, textBrush, x, primaryLabel, primaryColor);
+        }
+
+        if (_samples.Any(sample => sample.SecondaryAvailablePercent is not null))
+        {
+            x = DrawLineLegend(graphics, legendFont, textBrush, x, secondaryLabel, secondaryColor);
+        }
+
+        if (_restoreEvents.Count > 0)
+        {
+            DrawUpwardTriangle(graphics, _palette.Success, new PointF(x + 5, 24), 5f);
+            graphics.DrawString("Reset", legendFont, textBrush, x + 16, 15);
+            x += 16 + graphics.MeasureString("Reset", legendFont).Width + 20;
+        }
+
+        if (_depletionForecasts.Count > 0)
+        {
+            _ = DrawLineLegend(
+                graphics,
+                legendFont,
+                textBrush,
+                x,
+                "Projected to 0%",
+                _palette.Danger,
+                dashed: true);
+        }
+
+        if (OffHoursDescription is { } offHours)
+        {
+            if (_showOffHourSegments)
+            {
+                DrawLegendLine(graphics, _palette.Danger, 18, 43, dashed: true);
+            }
+
+            graphics.DrawString(
+                _showOffHourSegments
+                    ? $"Assumed off hours excluded: {offHours}"
+                    : $"Assumed off hours collapsed: {offHours}",
+                legendFont,
+                textBrush,
+                _showOffHourSegments ? 38 : 18,
+                34);
+        }
     }
 
-    private void DrawGrid(Graphics graphics)
+    private void DrawGrid(Graphics graphics, TimelineInterval timeline)
     {
         using var axisFont = new Font(Font.FontFamily, 8f, FontStyle.Regular);
         using var labelBrush = new SolidBrush(_palette.MutedText);
@@ -173,16 +304,188 @@ public sealed class UsageHistoryChart : Control
             graphics.DrawString(label, axisFont, labelBrush, _plotRectangle.Left - size.Width - 8, y - (size.Height / 2));
         }
 
-        var (start, end) = VisibleInterval();
-        for (var index = 0; index <= 4; index++)
+        const int tickCount = 6;
+        var nowX = MapX(timeline.HistoryEnd, timeline);
+        for (var index = 0; index < tickCount; index++)
         {
-            var fraction = index / 4d;
+            var fraction = index / (double)(tickCount - 1);
             var x = _plotRectangle.Left + ((float)fraction * _plotRectangle.Width);
-            var instant = start + TimeSpan.FromTicks((long)((end - start).Ticks * fraction));
-            var label = FormatAxisTime(instant.ToLocalTime());
+            if (_forecastEnd is not null && Math.Abs(x - nowX) < 36)
+            {
+                continue;
+            }
+
+            graphics.DrawLine(gridPen, x, _plotRectangle.Top, x, _plotRectangle.Bottom);
+            var instant = TimestampAtDisplayFraction(timeline, fraction);
+            var label = _forecastEnd is null && index == tickCount - 1
+                ? "Now"
+                : FormatAxisTime(instant.ToLocalTime(), timeline.End - timeline.Start);
             var size = graphics.MeasureString(label, axisFont);
-            var labelX = Math.Clamp(x - (size.Width / 2), _plotRectangle.Left, _plotRectangle.Right - size.Width);
+            var labelX = Math.Clamp(
+                x - (size.Width / 2),
+                _plotRectangle.Left,
+                _plotRectangle.Right - size.Width);
             graphics.DrawString(label, axisFont, labelBrush, labelX, _plotRectangle.Bottom + 8);
+        }
+
+        if (_forecastEnd is not null)
+        {
+            const string label = "Now";
+            var size = graphics.MeasureString(label, axisFont);
+            var labelX = Math.Clamp(
+                nowX - (size.Width / 2),
+                _plotRectangle.Left,
+                _plotRectangle.Right - size.Width);
+            graphics.DrawString(
+                label,
+                axisFont,
+                labelBrush,
+                labelX,
+                _plotRectangle.Bottom + 8);
+        }
+    }
+
+    private void ConfigureForecastRectangle(TimelineInterval timeline)
+    {
+        if (_forecastEnd is null)
+        {
+            _forecastRectangle = RectangleF.Empty;
+            return;
+        }
+
+        var forecastLeft = MapX(timeline.HistoryEnd, timeline);
+        _forecastRectangle = new RectangleF(
+            forecastLeft,
+            _plotRectangle.Top,
+            Math.Max(0, _plotRectangle.Right - forecastLeft),
+            _plotRectangle.Height);
+    }
+
+    private void DrawForecastBackground(Graphics graphics)
+    {
+        if (_forecastEnd is null)
+        {
+            return;
+        }
+
+        using var backgroundBrush = new SolidBrush(Color.FromArgb(
+            _palette.IsDark ? 18 : 10,
+            _palette.Danger));
+        graphics.FillRectangle(backgroundBrush, _forecastRectangle);
+        using var dividerPen = new Pen(Color.FromArgb(150, _palette.MutedText))
+        {
+            DashStyle = DashStyle.Dot,
+        };
+        graphics.DrawLine(
+            dividerPen,
+            _forecastRectangle.Left,
+            _forecastRectangle.Top,
+            _forecastRectangle.Left,
+            _forecastRectangle.Bottom);
+    }
+
+    private void DrawDepletionForecasts(
+        Graphics graphics,
+        TimelineInterval timeline)
+    {
+        if (_forecastEnd is null)
+        {
+            return;
+        }
+
+        using var linePen = new Pen(_palette.Danger, 2.25f)
+        {
+            DashStyle = DashStyle.Dash,
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+        };
+        using var offHourPen = new Pen(Color.FromArgb(190, _palette.Danger), 2f)
+        {
+            DashStyle = DashStyle.Dot,
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+        };
+        using var endpointBrush = new SolidBrush(_palette.Danger);
+        using var labelFont = new Font(Font.FontFamily, 8f, FontStyle.Bold);
+        using var hintFont = new Font(Font.FontFamily, 7.5f, FontStyle.Regular);
+        using var labelBrush = new SolidBrush(_palette.Danger);
+        using var hintBrush = new SolidBrush(_palette.SecondaryText);
+        using var labelBackground = new SolidBrush(_palette.Card);
+        using var labelFormat = new StringFormat
+        {
+            FormatFlags = StringFormatFlags.NoWrap,
+            Trimming = StringTrimming.EllipsisCharacter,
+        };
+
+        for (var index = 0; index < _depletionForecasts.Count; index++)
+        {
+            var forecast = _depletionForecasts[index];
+            DrawForecastSegments(graphics, forecast, timeline, linePen, offHourPen);
+            var endpoint = new PointF(
+                MapX(forecast.DepletesAt, timeline),
+                MapY(0));
+            graphics.FillEllipse(endpointBrush, endpoint.X - 4, endpoint.Y - 4, 8, 8);
+
+            var windowLabel = FormatForecastWindowLabel(forecast.Duration);
+            var label = $"{windowLabel} → 0%  {FormatForecastTime(forecast.DepletesAt)}";
+            var labelWidth = Math.Min(225, _plotRectangle.Width - 16);
+            var labelLeft = Math.Max(_plotRectangle.Left + 8, _plotRectangle.Right - labelWidth - 8);
+            var blockRectangle = new RectangleF(
+                labelLeft,
+                _forecastRectangle.Top + 7 + (index * 39),
+                labelWidth,
+                36);
+            var labelRectangle = new RectangleF(
+                blockRectangle.Left,
+                blockRectangle.Top + 1,
+                blockRectangle.Width,
+                17);
+            var hintRectangle = new RectangleF(
+                blockRectangle.Left,
+                blockRectangle.Top + 18,
+                blockRectangle.Width,
+                16);
+            graphics.FillRectangle(labelBackground, blockRectangle);
+            graphics.DrawString(label, labelFont, labelBrush, labelRectangle, labelFormat);
+            graphics.DrawString(
+                FormatResetLeadTime(forecast.TimeBeforeReset!.Value),
+                hintFont,
+                hintBrush,
+                hintRectangle,
+                labelFormat);
+        }
+    }
+
+    private void DrawForecastSegments(
+        Graphics graphics,
+        UsageDepletionForecast forecast,
+        TimelineInterval timeline,
+        Pen activePen,
+        Pen offHourPen)
+    {
+        var cursor = forecast.RecordedAt;
+        while (cursor < forecast.DepletesAt)
+        {
+            var schedule = forecast.ActivitySchedule;
+            var isOffHour = schedule is not null && !schedule.IsActive(cursor);
+            var segmentEnd = schedule?.NextHourBoundary(cursor) ?? forecast.DepletesAt;
+            if (segmentEnd > forecast.DepletesAt)
+            {
+                segmentEnd = forecast.DepletesAt;
+            }
+
+            if (!isOffHour || _showOffHourSegments)
+            {
+                var startPoint = new PointF(
+                    MapX(cursor, timeline),
+                    MapY(forecast.ProjectedAvailablePercentAt(cursor)));
+                var endPoint = new PointF(
+                    MapX(segmentEnd, timeline),
+                    MapY(forecast.ProjectedAvailablePercentAt(segmentEnd)));
+                graphics.DrawLine(isOffHour ? offHourPen : activePen, startPoint, endPoint);
+            }
+
+            cursor = segmentEnd;
         }
     }
 
@@ -191,8 +494,7 @@ public sealed class UsageHistoryChart : Control
         IReadOnlyList<UsageHistorySample> samples,
         Func<UsageHistorySample, double?> selector,
         Color color,
-        DateTimeOffset start,
-        DateTimeOffset end)
+        TimelineInterval timeline)
     {
         using var pen = new Pen(color, 2.25f)
         {
@@ -215,7 +517,7 @@ public sealed class UsageHistoryChart : Control
             }
 
             segment.Add(new PointF(
-                MapX(sample.RecordedAt, start, end),
+                MapX(sample.RecordedAt, timeline),
                 MapY(value.Value)));
         }
 
@@ -224,23 +526,19 @@ public sealed class UsageHistoryChart : Control
 
     private void DrawRestoreMarkers(
         Graphics graphics,
-        DateTimeOffset start,
-        DateTimeOffset end,
-        Color primaryColor,
-        Color secondaryColor)
+        TimelineInterval timeline)
     {
         foreach (var restore in _restoreEvents)
         {
-            if (restore.RecordedAt < start || restore.RecordedAt > end)
+            if (restore.RecordedAt < timeline.Start || restore.RecordedAt > timeline.End)
             {
                 continue;
             }
 
-            var color = restore.Window == UsageWindowKind.FiveHour ? primaryColor : secondaryColor;
             var point = new PointF(
-                MapX(restore.RecordedAt, start, end),
+                MapX(restore.RecordedAt, timeline),
                 MapY(restore.AvailablePercent));
-            DrawUpwardTriangle(graphics, color, point, 5.5f);
+            DrawUpwardTriangle(graphics, _palette.Success, point, 5.5f);
         }
     }
 
@@ -270,42 +568,268 @@ public sealed class UsageHistoryChart : Control
         return visible;
     }
 
-    private (DateTimeOffset Start, DateTimeOffset End) VisibleInterval()
+    private TimelineInterval VisibleInterval()
     {
         var now = DateTimeOffset.Now;
-        var end = _samples.Length > 0 && _samples[^1].RecordedAt > now ? _samples[^1].RecordedAt : now;
-        return (end - _range, end);
+        var historyEnd = _samples.Length > 0 && _samples[^1].RecordedAt > now
+            ? _samples[^1].RecordedAt
+            : now;
+        var rangeStart = historyEnd - _range;
+        var earliestSample = _samples.FirstOrDefault()?.RecordedAt ?? historyEnd;
+        var start = earliestSample > rangeStart ? earliestSample : rangeStart;
+        var minimumHistoryStart = historyEnd - TimeSpan.FromDays(1);
+        if (start > minimumHistoryStart)
+        {
+            start = minimumHistoryStart;
+        }
+
+        var end = _forecastEnd is { } forecastEnd && forecastEnd > historyEnd
+            ? forecastEnd
+            : historyEnd;
+        return new TimelineInterval(start, historyEnd, end);
     }
 
-    private float MapX(DateTimeOffset timestamp, DateTimeOffset start, DateTimeOffset end)
+    private TimeSpan DisplayDuration(
+        DateTimeOffset start,
+        DateTimeOffset end,
+        TimelineInterval timeline)
     {
-        var fraction = (timestamp - start).TotalSeconds / Math.Max(1d, (end - start).TotalSeconds);
+        if (end <= start)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var cursor = start;
+        var displayedTicks = 0L;
+        if (cursor < timeline.HistoryEnd)
+        {
+            var historySegmentEnd = EarlierOf(end, timeline.HistoryEnd);
+            displayedTicks = checked(displayedTicks + (historySegmentEnd - cursor).Ticks);
+            cursor = historySegmentEnd;
+        }
+
+        if (cursor >= end)
+        {
+            return TimeSpan.FromTicks(displayedTicks);
+        }
+
+        if (_showOffHourSegments)
+        {
+            return TimeSpan.FromTicks(checked(displayedTicks + (end - cursor).Ticks));
+        }
+
+        while (cursor < end)
+        {
+            var segmentEnd = NextForecastDisplayBoundary(cursor, end);
+            if (IsForecastTimeDisplayed(cursor))
+            {
+                displayedTicks = checked(displayedTicks + (segmentEnd - cursor).Ticks);
+            }
+
+            cursor = segmentEnd;
+        }
+
+        return TimeSpan.FromTicks(displayedTicks);
+    }
+
+    private DateTimeOffset TimestampAtDisplayFraction(
+        TimelineInterval timeline,
+        double fraction)
+    {
+        var total = DisplayDuration(timeline.Start, timeline.End, timeline);
+        var targetTicks = (long)(total.Ticks * Math.Clamp(fraction, 0d, 1d));
+        var historyTicks = (timeline.HistoryEnd - timeline.Start).Ticks;
+        if (targetTicks <= historyTicks)
+        {
+            return timeline.Start.AddTicks(targetTicks);
+        }
+
+        var remainingTicks = targetTicks - historyTicks;
+        if (_showOffHourSegments)
+        {
+            return EarlierOf(timeline.HistoryEnd.AddTicks(remainingTicks), timeline.End);
+        }
+
+        var cursor = timeline.HistoryEnd;
+        while (cursor < timeline.End)
+        {
+            var segmentEnd = NextForecastDisplayBoundary(cursor, timeline.End);
+            if (IsForecastTimeDisplayed(cursor))
+            {
+                var segmentTicks = (segmentEnd - cursor).Ticks;
+                if (remainingTicks <= segmentTicks)
+                {
+                    return cursor.AddTicks(remainingTicks);
+                }
+
+                remainingTicks -= segmentTicks;
+            }
+
+            cursor = segmentEnd;
+        }
+
+        return timeline.End;
+    }
+
+    private bool IsForecastTimeDisplayed(DateTimeOffset timestamp)
+    {
+        var hasForecast = false;
+        foreach (var forecast in _depletionForecasts)
+        {
+            if (timestamp >= forecast.DepletesAt)
+            {
+                continue;
+            }
+
+            hasForecast = true;
+            if (forecast.ActivitySchedule is null
+                || forecast.ActivitySchedule.IsActive(timestamp))
+            {
+                return true;
+            }
+        }
+
+        return !hasForecast;
+    }
+
+    private DateTimeOffset NextForecastDisplayBoundary(
+        DateTimeOffset timestamp,
+        DateTimeOffset end)
+    {
+        var boundary = end;
+        foreach (var forecast in _depletionForecasts)
+        {
+            if (forecast.DepletesAt > timestamp && forecast.DepletesAt < boundary)
+            {
+                boundary = forecast.DepletesAt;
+            }
+
+            if (forecast.ActivitySchedule is not { } schedule
+                || forecast.DepletesAt <= timestamp)
+            {
+                continue;
+            }
+
+            var hourBoundary = schedule.NextHourBoundary(timestamp);
+            if (hourBoundary < boundary)
+            {
+                boundary = hourBoundary;
+            }
+        }
+
+        return boundary > timestamp ? boundary : end;
+    }
+
+    private static DateTimeOffset EarlierOf(DateTimeOffset first, DateTimeOffset second)
+        => first <= second ? first : second;
+
+    private float MapX(DateTimeOffset timestamp, TimelineInterval timeline)
+    {
+        var elapsed = DisplayDuration(timeline.Start, timestamp, timeline);
+        var total = DisplayDuration(timeline.Start, timeline.End, timeline);
+        var fraction = elapsed.TotalSeconds / Math.Max(1d, total.TotalSeconds);
         return _plotRectangle.Left + ((float)Math.Clamp(fraction, 0d, 1d) * _plotRectangle.Width);
     }
 
     private float MapY(double value)
         => _plotRectangle.Top + ((float)(1d - (Math.Clamp(value, 0, 100) / 100d)) * _plotRectangle.Height);
 
-    private string FormatAxisTime(DateTimeOffset timestamp)
+    private static string FormatAxisTime(DateTimeOffset timestamp, TimeSpan span)
     {
-        if (_range <= TimeSpan.FromDays(1))
+        if (span <= TimeSpan.FromDays(1))
         {
             return timestamp.ToString("h tt");
         }
 
-        return _range <= TimeSpan.FromDays(7)
-            ? timestamp.ToString("ddd")
+        return span <= TimeSpan.FromDays(7)
+            ? timestamp.ToString("ddd h tt")
             : timestamp.ToString("MMM d");
     }
 
-    private HoverPoint? HitTestPoint(Point location, DateTimeOffset start, DateTimeOffset end)
+    private static string FormatWindowLegendLabel(TimeSpan? duration, string fallback)
+    {
+        const string suffix = " limit";
+        var label = UsageText.WindowLabel(duration, fallback + suffix);
+        return label.EndsWith(suffix, StringComparison.Ordinal)
+            ? label[..^suffix.Length]
+            : label;
+    }
+
+    private static string FormatForecastWindowLabel(TimeSpan duration)
+    {
+        if (duration.TotalHours is >= 4.5 and <= 5.5)
+        {
+            return "5h";
+        }
+
+        if (duration.TotalDays is >= 6.5 and <= 7.5)
+        {
+            return "Week";
+        }
+
+        return duration.TotalDays >= 1
+            ? $"{Math.Round(duration.TotalDays):0}d"
+            : $"{Math.Round(duration.TotalHours):0}h";
+    }
+
+    private static string FormatResetLeadTime(TimeSpan leadTime)
+    {
+        var totalMinutes = Math.Max(1, (int)Math.Floor(leadTime.TotalMinutes));
+        var days = totalMinutes / (24 * 60);
+        var hours = (totalMinutes / 60) % 24;
+        var minutes = totalMinutes % 60;
+        if (days > 0)
+        {
+            return hours > 0
+                ? $"{days}d {hours}h before reset"
+                : $"{days}d before reset";
+        }
+
+        return hours > 0
+            ? minutes > 0
+                ? $"{hours}h {minutes}m before reset"
+                : $"{hours}h before reset"
+            : $"{minutes}m before reset";
+    }
+
+    private static string FormatOffHours(UsageActivitySchedule schedule)
+    {
+        var offHours = schedule.OffHours.ToHashSet();
+        var starts = Enumerable.Range(0, 24)
+            .Where(hour => offHours.Contains(hour) && !offHours.Contains((hour + 23) % 24))
+            .ToArray();
+        var ranges = starts.Select(start =>
+        {
+            var end = (start + 1) % 24;
+            while (offHours.Contains(end))
+            {
+                end = (end + 1) % 24;
+            }
+
+            return $"{FormatClockHour(start)}–{FormatClockHour(end)}";
+        });
+        return string.Join(", ", ranges);
+    }
+
+    private static string FormatClockHour(int hour)
+        => new DateTime(2000, 1, 1, hour, 0, 0).ToString("h tt");
+
+    private static string FormatForecastTime(DateTimeOffset timestamp)
+    {
+        var local = timestamp.ToLocalTime();
+        return local.Date == DateTime.Today
+            ? local.ToString("h:mm tt")
+            : local.ToString("ddd h:mm tt");
+    }
+
+    private HoverPoint? HitTestPoint(Point location, TimelineInterval timeline)
     {
         const float hitRadius = 9f;
         var position = Math.Clamp(
             (location.X - _plotRectangle.Left) / _plotRectangle.Width,
             0f,
             1f);
-        var target = start + TimeSpan.FromTicks((long)((end - start).Ticks * position));
+        var target = TimestampAtDisplayFraction(timeline, position);
         var nearestIndex = FindNearestSampleIndex(target);
         var firstIndex = Math.Max(0, nearestIndex - 512);
         var lastIndex = Math.Min(_samples.Length - 1, nearestIndex + 512);
@@ -315,19 +839,19 @@ public sealed class UsageHistoryChart : Control
         for (var index = firstIndex; index <= lastIndex; index++)
         {
             var sample = _samples[index];
-            if (sample.RecordedAt < start || sample.RecordedAt > end)
+            if (sample.RecordedAt < timeline.Start || sample.RecordedAt > timeline.End)
             {
                 continue;
             }
 
-            var x = MapX(sample.RecordedAt, start, end);
+            var x = MapX(sample.RecordedAt, timeline);
             if (Math.Abs(x - location.X) > hitRadius)
             {
                 continue;
             }
 
-            TestPoint(sample, UsageWindowKind.FiveHour, sample.PrimaryAvailablePercent, x);
-            TestPoint(sample, UsageWindowKind.Weekly, sample.SecondaryAvailablePercent, x);
+            TestPoint(sample, UsageWindowKind.Primary, sample.PrimaryAvailablePercent, x);
+            TestPoint(sample, UsageWindowKind.Secondary, sample.SecondaryAvailablePercent, x);
         }
 
         return closest;
@@ -391,7 +915,9 @@ public sealed class UsageHistoryChart : Control
 
     private string BuildToolTip(HoverPoint point)
     {
-        var windowName = point.Window == UsageWindowKind.FiveHour ? "5-hour limit" : "Weekly limit";
+        var windowName = UsageText.WindowLabel(
+            point.Sample.GetDuration(point.Window),
+            point.Window == UsageWindowKind.Primary ? "Primary limit" : "Secondary limit");
         var restored = _restoreEvents.Any(item =>
             item.RecordedAt == point.Sample.RecordedAt && item.Window == point.Window);
         var suffix = restored ? "\nAvailability restored / reset" : string.Empty;
@@ -402,21 +928,20 @@ public sealed class UsageHistoryChart : Control
 
     private void DrawHoveredPoint(
         Graphics graphics,
-        DateTimeOffset start,
-        DateTimeOffset end,
+        TimelineInterval timeline,
         Color primaryColor,
         Color secondaryColor)
     {
         if (_hoveredPoint is null
-            || _hoveredPoint.Sample.RecordedAt < start
-            || _hoveredPoint.Sample.RecordedAt > end)
+            || _hoveredPoint.Sample.RecordedAt < timeline.Start
+            || _hoveredPoint.Sample.RecordedAt > timeline.End)
         {
             return;
         }
 
-        var color = _hoveredPoint.Window == UsageWindowKind.FiveHour ? primaryColor : secondaryColor;
+        var color = _hoveredPoint.Window == UsageWindowKind.Primary ? primaryColor : secondaryColor;
         var point = new PointF(
-            MapX(_hoveredPoint.Sample.RecordedAt, start, end),
+            MapX(_hoveredPoint.Sample.RecordedAt, timeline),
             MapY(_hoveredPoint.AvailablePercent));
         using var haloBrush = new SolidBrush(_palette.Card);
         using var pointBrush = new SolidBrush(color);
@@ -465,12 +990,27 @@ public sealed class UsageHistoryChart : Control
         }
     }
 
-    private static void DrawLegendLine(Graphics graphics, Color color, float x, float y)
+    private static float DrawLineLegend(
+        Graphics graphics,
+        Font font,
+        Brush textBrush,
+        float x,
+        string text,
+        Color color,
+        bool dashed = false)
+    {
+        DrawLegendLine(graphics, color, x, 24, dashed);
+        graphics.DrawString(text, font, textBrush, x + 20, 15);
+        return x + 20 + graphics.MeasureString(text, font).Width + 20;
+    }
+
+    private static void DrawLegendLine(Graphics graphics, Color color, float x, float y, bool dashed)
     {
         using var pen = new Pen(color, 2.25f)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
+            DashStyle = dashed ? DashStyle.Dash : DashStyle.Solid,
         };
         graphics.DrawLine(pen, x, y, x + 13, y);
     }
@@ -494,4 +1034,9 @@ public sealed class UsageHistoryChart : Control
         UsageWindowKind Window,
         double AvailablePercent,
         PointF Location);
+
+    private sealed record TimelineInterval(
+        DateTimeOffset Start,
+        DateTimeOffset HistoryEnd,
+        DateTimeOffset End);
 }

@@ -337,21 +337,29 @@ public static class UsageHistoryAnalysis
             var gap = current.RecordedAt - previous.RecordedAt;
             if (previousAvailable is null
                 || currentAvailable is null
-                || gap <= TimeSpan.Zero
-                || gap > MaximumScheduleSampleGap)
+                || gap <= TimeSpan.Zero)
             {
                 continue;
             }
 
             var consumed = previousAvailable.Value - currentAvailable.Value >= MinimumConsumedPercent;
-            AccumulateByLocalHour(
-                previous.RecordedAt,
-                current.RecordedAt,
-                zone,
-                (hour, duration) =>
-                {
-                    observedHours[hour] += duration.TotalHours;
-                });
+            var unchanged = Math.Abs(previousAvailable.Value - currentAvailable.Value)
+                < MinimumConsumedPercent;
+            if (gap <= MaximumScheduleSampleGap || unchanged)
+            {
+                // Equal endpoints establish a flat interval even when the app did not
+                // sample inside it (for example, overnight). A long interval containing
+                // consumption is ambiguous, so do not classify its intervening hours.
+                AccumulateByLocalHour(
+                    previous.RecordedAt,
+                    current.RecordedAt,
+                    zone,
+                    (hour, duration) =>
+                    {
+                        observedHours[hour] += duration.TotalHours;
+                    });
+            }
+
             if (consumed)
             {
                 activeHours[TimeZoneInfo.ConvertTime(current.RecordedAt, zone).Hour] = true;

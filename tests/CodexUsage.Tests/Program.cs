@@ -31,6 +31,7 @@ internal static class Program
             HistoryForecastHandlesSafeAndFlatRates();
             HistoryForecastUsesReportedDuration();
             HistoryForecastLearnsSingleActiveHourAndPausesOffHours();
+            HistoryScheduleTreatsUnchangedLongGapsAsFlat();
             HistoryForecastSpreadsRoundedUsageAcrossElapsedWorkdays();
             HistoryForecastFallsBackWhenScheduleCannotExplainWindow();
             HistoryFormUsesReportedWindowLabel();
@@ -398,6 +399,61 @@ internal static class Program
         Equal(0.25d, fractionalForecast!.ConsumedPercentPerHour, "fractional availability remains precise");
     }
 
+    private static void HistoryScheduleTreatsUnchangedLongGapsAsFlat()
+    {
+        var dayStart = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+        var resetAt = dayStart.AddDays(7);
+        var samples = new List<UsageHistorySample>();
+        var available = 100d;
+        for (var hour = 7; hour <= 22; hour++)
+        {
+            if (hour == 10)
+            {
+                available -= 10;
+            }
+
+            samples.Add(new UsageHistorySample(
+                dayStart.AddHours(hour),
+                available,
+                null,
+                resetAt,
+                null,
+                TimeSpan.FromDays(7),
+                null));
+        }
+
+        // No intermediate samples overnight, but equal endpoints prove the quota stayed flat.
+        samples.Add(new UsageHistorySample(
+            dayStart.AddDays(1).AddHours(7),
+            available,
+            null,
+            resetAt,
+            null,
+            TimeSpan.FromDays(7),
+            null));
+        for (var hour = 8; hour <= 22; hour++)
+        {
+            samples.Add(new UsageHistorySample(
+                dayStart.AddDays(1).AddHours(hour),
+                available,
+                null,
+                resetAt,
+                null,
+                TimeSpan.FromDays(7),
+                null));
+        }
+
+        var schedule = UsageHistoryAnalysis.InferActivitySchedule(
+            samples,
+            UsageWindowKind.Primary,
+            TimeZoneInfo.Utc);
+
+        NotNull(schedule, "flat overnight gap activity schedule");
+        Equal(10, schedule!.ActiveHours.Single(), "flat overnight gap active hour");
+        Equal(true, schedule.OffHours.Contains(0), "flat overnight gap marks midnight off");
+        Equal(true, schedule.OffHours.Contains(6), "flat overnight gap marks early morning off");
+    }
+
     private static void HistoryForecastFallsBackWhenScheduleCannotExplainWindow()
     {
         var historicalStart = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
@@ -456,9 +512,14 @@ internal static class Program
         var offHoursToggle = form.Controls
             .OfType<CheckBox>()
             .Single(control => control.Text == "Show off-hour flats");
+        form.Location = new Point(-10_000, -10_000);
+        form.Show();
+        Application.DoEvents();
         Contains("Latest: Weekly 88%", status, "history uses reported window label");
         Equal(false, status.Contains("Secondary", StringComparison.Ordinal), "history hides unavailable window");
         Equal(true, offHoursToggle.Enabled, "off-hour toggle remains readable before schedule learning");
+        Equal(false, offHoursToggle.Visible, "off-hour toggle hidden before schedule learning");
+        form.Hide();
     }
 
     private static void HistoryFormShowsLearnedOffHoursAndToggle()
@@ -496,14 +557,20 @@ internal static class Program
         var subtitle = form.Controls
             .OfType<Label>()
             .Single(control => control.Text.Contains("assumed off hours", StringComparison.OrdinalIgnoreCase));
+        form.Location = new Point(-10_000, -10_000);
+        form.Show();
+        Application.DoEvents();
 
         Equal(true, chart.HasLearnedOffHours, "history chart learns off hours");
+        Equal(true, chart.HasOffHourSegments, "history chart projects off-hour flats");
         Equal("11 PM–7 AM", chart.OffHoursDescription, "history chart off-hour description");
         Equal(true, toggle.Enabled, "off-hour toggle enabled");
+        Equal(true, toggle.Visible, "off-hour toggle shown for learned schedule");
         Equal(true, chart.ShowOffHourSegments, "off-hour flats shown by default");
         Contains("pauses", subtitle.Text, "history subtitle explains off hours");
         toggle.Checked = false;
         Equal(false, chart.ShowOffHourSegments, "off-hour toggle hides flat segments");
+        form.Hide();
     }
 
     private static void HistoryStoreCompactsAndReloadsSamples()

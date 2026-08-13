@@ -54,6 +54,12 @@ public sealed class UsageHistoryChart : Control
     public bool HasLearnedOffHours
         => _depletionForecasts.Any(forecast => forecast.ActivitySchedule is not null);
 
+    public bool HasOffHourSegments
+        => _depletionForecasts.Any(forecast =>
+            forecast.ActivitySchedule is { } schedule
+            && schedule.GetActiveDuration(forecast.RecordedAt, forecast.DepletesAt)
+                < forecast.DepletesAt - forecast.RecordedAt);
+
     public string? OffHoursDescription
     {
         get
@@ -189,7 +195,7 @@ public sealed class UsageHistoryChart : Control
             secondaryColor,
             timeline.Start,
             timeline.End);
-        DrawRestoreMarkers(graphics, timeline.Start, timeline.End, primaryColor, secondaryColor);
+        DrawRestoreMarkers(graphics, timeline.Start, timeline.End);
         DrawDepletionForecasts(graphics, timeline);
         DrawHoveredPoint(graphics, timeline.Start, timeline.End, primaryColor, secondaryColor);
 
@@ -497,9 +503,7 @@ public sealed class UsageHistoryChart : Control
     private void DrawRestoreMarkers(
         Graphics graphics,
         DateTimeOffset start,
-        DateTimeOffset end,
-        Color primaryColor,
-        Color secondaryColor)
+        DateTimeOffset end)
     {
         foreach (var restore in _restoreEvents)
         {
@@ -508,11 +512,10 @@ public sealed class UsageHistoryChart : Control
                 continue;
             }
 
-            var color = restore.Window == UsageWindowKind.Primary ? primaryColor : secondaryColor;
             var point = new PointF(
                 MapX(restore.RecordedAt, start, end),
                 MapY(restore.AvailablePercent));
-            DrawUpwardTriangle(graphics, color, point, 5.5f);
+            DrawUpwardTriangle(graphics, _palette.Success, point, 5.5f);
         }
     }
 

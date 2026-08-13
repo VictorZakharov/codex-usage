@@ -7,6 +7,7 @@ using CodexUsage.History;
 using CodexUsage.Models;
 using CodexUsage.Parsing;
 using CodexUsage.Services;
+using CodexUsage.Tokens;
 
 namespace CodexUsage.Tests;
 
@@ -29,9 +30,14 @@ internal static class Program
             HistoryForecastUsesRateSinceReset();
             HistoryForecastHandlesSafeAndFlatRates();
             HistoryForecastUsesReportedDuration();
+            HistoryForecastLearnsSingleActiveHourAndPausesOffHours();
+            HistoryForecastSpreadsRoundedUsageAcrossElapsedWorkdays();
+            HistoryForecastFallsBackWhenScheduleCannotExplainWindow();
             HistoryFormUsesReportedWindowLabel();
+            HistoryFormShowsLearnedOffHoursAndToggle();
             HistoryStoreCompactsAndReloadsSamples();
             HistoryStoreUpgradesLegacySamplesWithDuration();
+            TokenUsageReaderAggregatesPeriodResetAndToday();
             PopupLayoutSurvivesDpiChange();
 
             if (args.Contains("--live", StringComparer.OrdinalIgnoreCase))
@@ -270,6 +276,7 @@ internal static class Program
         Equal(windowStart.AddHours(4), forecast.DepletesAt, "primary forecast depletion time");
         Equal(true, forecast.ReachesZeroBeforeReset, "primary forecast before reset");
         Equal(TimeSpan.FromHours(1), forecast.TimeBeforeReset, "primary forecast lead time");
+        Equal<UsageActivitySchedule?>(null, forecast.ActivitySchedule, "short history uses clock-time fallback");
     }
 
     private static void HistoryForecastHandlesSafeAndFlatRates()
@@ -309,10 +316,127 @@ internal static class Program
         Equal(TimeSpan.FromDays(3), forecast.TimeBeforeReset, "reported-duration forecast lead time");
     }
 
+    private static void HistoryForecastLearnsSingleActiveHourAndPausesOffHours()
+    {
+        var windowStart = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+        var resetAt = windowStart.AddDays(7);
+        var available = 100d;
+        var samples = new List<UsageHistorySample>();
+        for (var hour = 0; hour <= 24; hour++)
+        {
+            if (hour > 0 && windowStart.AddHours(hour - 1).Hour == 9)
+            {
+                available -= 50;
+            }
+
+            samples.Add(new UsageHistorySample(
+                windowStart.AddHours(hour),
+                available,
+                null,
+                resetAt,
+                null,
+                TimeSpan.FromDays(7),
+                null));
+        }
+
+        var forecast = UsageHistoryAnalysis.ForecastDepletion(
+            samples,
+            UsageWindowKind.Primary,
+            TimeZoneInfo.Utc);
+
+        NotNull(forecast, "single-hour activity forecast");
+        NotNull(forecast!.ActivitySchedule, "single-hour activity schedule");
+        Equal(1, forecast.ActivitySchedule!.ActiveHours.Count, "single active clock hour count");
+        Equal(10, forecast.ActivitySchedule.ActiveHours[0], "single active clock hour");
+        Equal(23, forecast.ActivitySchedule.OffHours.Count, "single-hour off clock hour count");
+        Equal(50d, forecast.ConsumedPercentPerHour, "single-hour active usage rate");
+        Equal(windowStart.AddDays(1).AddHours(11), forecast.DepletesAt, "forecast pauses until next active hour");
+        Equal(50d, forecast.ProjectedAvailablePercentAt(windowStart.AddDays(1).AddHours(10)), "quota stays flat off hours");
+        Equal(25d, forecast.ProjectedAvailablePercentAt(windowStart.AddDays(1).AddHours(10.5)), "quota falls during active hour");
+    }
+
+    private static void HistoryForecastSpreadsRoundedUsageAcrossElapsedWorkdays()
+    {
+        var windowStart = new DateTimeOffset(2026, 8, 10, 10, 0, 0, TimeSpan.Zero);
+        var resetAt = windowStart.AddDays(7);
+        var samples = Enumerable.Range(0, (2 * 24) + 1)
+            .Select(hour =>
+            {
+                var recordedAt = windowStart.AddHours(hour);
+                var available = hour == 2 * 24 ? 99d : 100d;
+                return new UsageHistorySample(
+                    recordedAt,
+                    available,
+                    null,
+                    resetAt,
+                    null,
+                    TimeSpan.FromDays(7),
+                    null);
+            })
+            .ToArray();
+
+        var forecast = UsageHistoryAnalysis.ForecastDepletion(
+            samples,
+            UsageWindowKind.Primary,
+            TimeZoneInfo.Utc);
+
+        NotNull(forecast, "rounded multi-day forecast");
+        NotNull(forecast!.ActivitySchedule, "rounded multi-day activity schedule");
+        Equal(10, forecast.ActivitySchedule!.ActiveHours.Single(), "rounded drop active clock hour");
+        Equal(0.5d, forecast.ConsumedPercentPerHour, "rounded drop spreads over both workdays");
+
+        var fractionalSamples = samples
+            .Select(sample => sample.RecordedAt == windowStart.AddDays(2)
+                ? sample with { PrimaryAvailablePercent = 99.5d }
+                : sample)
+            .ToArray();
+        var fractionalForecast = UsageHistoryAnalysis.ForecastDepletion(
+            fractionalSamples,
+            UsageWindowKind.Primary,
+            TimeZoneInfo.Utc);
+        NotNull(fractionalForecast, "fractional availability forecast");
+        Equal(0.25d, fractionalForecast!.ConsumedPercentPerHour, "fractional availability remains precise");
+    }
+
+    private static void HistoryForecastFallsBackWhenScheduleCannotExplainWindow()
+    {
+        var historicalStart = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+        var samples = Enumerable.Range(0, 25)
+            .Select(hour => new UsageHistorySample(
+                historicalStart.AddHours(hour),
+                hour >= 10 ? 90d : 100d,
+                null,
+                historicalStart.AddDays(1),
+                null,
+                TimeSpan.FromDays(1),
+                null))
+            .ToList();
+        var currentWindowStart = historicalStart.AddDays(2);
+        samples.Add(new UsageHistorySample(
+            currentWindowStart.AddHours(1),
+            90d,
+            null,
+            currentWindowStart.AddHours(5),
+            null,
+            TimeSpan.FromHours(5),
+            null));
+
+        var forecast = UsageHistoryAnalysis.ForecastDepletion(
+            samples,
+            UsageWindowKind.Primary,
+            TimeZoneInfo.Utc);
+
+        NotNull(forecast, "schedule mismatch wall-clock forecast");
+        Equal<UsageActivitySchedule?>(null, forecast!.ActivitySchedule, "schedule mismatch uses fallback");
+        Equal(10d, forecast.ConsumedPercentPerHour, "schedule mismatch fallback rate");
+    }
+
     private static void HistoryFormUsesReportedWindowLabel()
     {
         var recordedAt = DateTimeOffset.UtcNow;
-        using var form = new HistoryForm(new AppSettings { Theme = ThemeMode.Dark });
+        using var form = new HistoryForm(
+            new AppSettings { Theme = ThemeMode.Dark },
+            (_, _, _, _) => new CodexTokenUsageSummary(0, null, 0, 0));
         form.UpdateHistory(
         [
             new UsageHistorySample(
@@ -331,6 +455,51 @@ internal static class Program
             .Text;
         Contains("Latest: Weekly 88%", status, "history uses reported window label");
         Equal(false, status.Contains("Secondary", StringComparison.Ordinal), "history hides unavailable window");
+    }
+
+    private static void HistoryFormShowsLearnedOffHoursAndToggle()
+    {
+        var windowStart = DateTimeOffset.Now.AddHours(-24);
+        var resetAt = windowStart.AddDays(7);
+        var available = 100d;
+        var samples = new List<UsageHistorySample>();
+        for (var hour = 0; hour <= 24; hour++)
+        {
+            var recordedAt = windowStart.AddHours(hour);
+            if (hour > 0 && recordedAt.ToLocalTime().Hour is >= 7 and < 23)
+            {
+                available -= 4;
+            }
+
+            samples.Add(new UsageHistorySample(
+                recordedAt,
+                available,
+                null,
+                resetAt,
+                null,
+                TimeSpan.FromDays(7),
+                null));
+        }
+
+        using var form = new HistoryForm(
+            new AppSettings { Theme = ThemeMode.Dark },
+            (_, _, _, _) => new CodexTokenUsageSummary(1_000, 500, 250, 1));
+        form.UpdateHistory(samples);
+        var chart = form.Controls.OfType<UsageHistoryChart>().Single();
+        var toggle = form.Controls
+            .OfType<CheckBox>()
+            .Single(control => control.Text == "Show off-hour flats");
+        var subtitle = form.Controls
+            .OfType<Label>()
+            .Single(control => control.Text.Contains("assumed off hours", StringComparison.OrdinalIgnoreCase));
+
+        Equal(true, chart.HasLearnedOffHours, "history chart learns off hours");
+        Equal("11 PM–7 AM", chart.OffHoursDescription, "history chart off-hour description");
+        Equal(true, toggle.Enabled, "off-hour toggle enabled");
+        Equal(true, chart.ShowOffHourSegments, "off-hour flats shown by default");
+        Contains("pauses", subtitle.Text, "history subtitle explains off hours");
+        toggle.Checked = false;
+        Equal(false, chart.ShowOffHourSegments, "off-hour toggle hides flat segments");
     }
 
     private static void HistoryStoreCompactsAndReloadsSamples()
@@ -414,6 +583,79 @@ internal static class Program
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    private static void TokenUsageReaderAggregatesPeriodResetAndToday()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"CodexUsage.Tests.{Guid.NewGuid():N}");
+        try
+        {
+            var sessions = Path.Combine(directory, "sessions", "2026", "08", "12");
+            Directory.CreateDirectory(sessions);
+            var firstStart = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+            WriteTokenSession(
+                Path.Combine(sessions, "rollout-first.jsonl"),
+                firstStart,
+                [
+                    (firstStart.AddHours(10), 100L),
+                    (firstStart.AddDays(1).AddHours(10), 250L),
+                    (firstStart.AddDays(2).AddHours(10), 400L),
+                ]);
+
+            var secondStart = firstStart.AddDays(2).AddHours(9);
+            WriteTokenSession(
+                Path.Combine(sessions, "rollout-second.jsonl"),
+                secondStart,
+                [(secondStart.AddHours(1.5), 50L)]);
+
+            var reader = new CodexTokenUsageReader(directory, TimeZoneInfo.Utc);
+            var summary = reader.Read(
+                firstStart.AddDays(2).AddHours(12),
+                firstStart.AddHours(12),
+                firstStart.AddDays(1).AddHours(12));
+
+            Equal(350L, summary.SelectedPeriodTokens, "selected-period token total");
+            Equal<long?>(200L, summary.SinceResetTokens, "since-reset token total");
+            Equal(200L, summary.TodayTokens, "today token total");
+            Equal(2, summary.SessionFiles, "token session file count");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    private static void WriteTokenSession(
+        string path,
+        DateTimeOffset startedAt,
+        IReadOnlyList<(DateTimeOffset Timestamp, long TotalTokens)> tokenEvents)
+    {
+        var lines = new List<string>
+        {
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                timestamp = startedAt,
+                type = "session_meta",
+                payload = new { },
+            }),
+        };
+        lines.AddRange(tokenEvents.Select(item => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            timestamp = item.Timestamp,
+            type = "event_msg",
+            payload = new
+            {
+                type = "token_count",
+                info = new
+                {
+                    total_token_usage = new { total_tokens = item.TotalTokens },
+                },
+            },
+        })));
+        File.WriteAllLines(path, lines);
     }
 
     private static UsageSnapshot CreateSnapshot(

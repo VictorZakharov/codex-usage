@@ -53,12 +53,14 @@ internal static class PreviewRenderer
                 .Select(index =>
                 {
                     var recordedAt = start.AddHours(index);
-                    var primaryAvailable = index == 7 * 24
-                        ? 20d
-                        : 100d - ((index % 5) * 16d);
-                    var weeklyAvailable = index == 7 * 24
-                        ? 25d
-                        : 92d - (index * 0.28d) + (index >= 96 ? 22d : 0d);
+                    var primaryWindowStart = index - (index % 5);
+                    var primaryActiveHours = Enumerable.Range(primaryWindowStart + 1, index - primaryWindowStart)
+                        .Count(hour => IsPreviewActiveHour(start.AddHours(hour)));
+                    var primaryAvailable = 100d - (primaryActiveHours * 22d);
+                    var weeklyWindowStart = index >= 96 ? 96 : 0;
+                    var weeklyActiveHours = Enumerable.Range(weeklyWindowStart + 1, index - weeklyWindowStart)
+                        .Count(hour => IsPreviewActiveHour(start.AddHours(hour)));
+                    var weeklyAvailable = (index >= 96 ? 100d : 92d) - (weeklyActiveHours * 1.1d);
                     return new UsageHistorySample(
                         recordedAt,
                         primaryAvailable,
@@ -70,10 +72,18 @@ internal static class PreviewRenderer
                 })
                 .ToArray();
 
-            using var historyForm = new HistoryForm(new AppSettings { Theme = ThemeMode.Dark });
+            using var historyForm = new HistoryForm(
+                new AppSettings { Theme = ThemeMode.Dark },
+                (_, _, _, _) => new CodexUsage.Tokens.CodexTokenUsageSummary(
+                    84_600_000,
+                    12_400_000,
+                    3_800_000,
+                    42));
             historyForm.UpdateHistory(samples);
             historyForm.Location = new Point(-10_000, -10_000);
             historyForm.Show();
+            Application.DoEvents();
+            Thread.Sleep(20);
             Application.DoEvents();
             using var historyBitmap = new Bitmap(historyForm.ClientSize.Width, historyForm.ClientSize.Height);
             historyForm.DrawToBitmap(historyBitmap, new Rectangle(Point.Empty, historyForm.ClientSize));
@@ -142,5 +152,11 @@ internal static class PreviewRenderer
 
         availablePercent = null;
         return false;
+    }
+
+    private static bool IsPreviewActiveHour(DateTimeOffset timestamp)
+    {
+        var localHour = timestamp.ToLocalTime().Hour;
+        return localHour is >= 7 and < 23;
     }
 }

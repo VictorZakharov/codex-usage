@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using CodexUsage.App.Settings;
+using CodexUsage.App.UI;
 using CodexUsage.Authentication;
 using CodexUsage.Formatting;
 using CodexUsage.History;
@@ -9,18 +12,22 @@ namespace CodexUsage.Tests;
 
 internal static class Program
 {
+    private const uint WmDpiChanged = 0x02E0;
     private static int _assertions;
 
+    [STAThread]
     public static async Task<int> Main(string[] args)
     {
         try
         {
+            ApplicationConfiguration.Initialize();
             ParserReadsStandardUsage();
             ParserHandlesStringValuesAndAdditionalLimits();
             CredentialParserReadsSnakeAndCamelCase();
             FormattingProducesUsefulLabels();
             HistoryDetectsRestoredQuota();
             HistoryStoreCompactsAndReloadsSamples();
+            PopupLayoutSurvivesDpiChange();
 
             if (args.Contains("--live", StringComparer.OrdinalIgnoreCase))
             {
@@ -36,6 +43,69 @@ internal static class Program
             return 1;
         }
     }
+
+    private static void PopupLayoutSurvivesDpiChange()
+    {
+        using var form = new PopupForm(new AppSettings { Theme = ThemeMode.Dark });
+        _ = form.Handle;
+
+        var originalDpi = form.DeviceDpi;
+        var changedDpi = originalDpi == 144 ? 192 : 144;
+
+        ChangeDpi(form, changedDpi);
+        form.UpdateState(null, refreshing: false, error: null);
+        AssertPopupLayout(form, changedDpi, "after DPI change");
+
+        ChangeDpi(form, originalDpi);
+        form.UpdateState(null, refreshing: false, error: null);
+        AssertPopupLayout(form, originalDpi, "after DPI restore");
+    }
+
+    private static void ChangeDpi(Form form, int newDpi)
+    {
+        var oldDpi = form.DeviceDpi;
+        var bounds = form.Bounds;
+        var suggestedBounds = new NativeRectangle(
+            bounds.Left,
+            bounds.Top,
+            bounds.Left + Scale(bounds.Width, newDpi, oldDpi),
+            bounds.Top + Scale(bounds.Height, newDpi, oldDpi));
+        var packedDpi = new IntPtr(newDpi | (newDpi << 16));
+
+        SendMessage(form.Handle, WmDpiChanged, packedDpi, ref suggestedBounds);
+    }
+
+    private static void AssertPopupLayout(PopupForm form, int expectedDpi, string state)
+    {
+        Equal(expectedDpi, form.DeviceDpi, $"popup device DPI {state}");
+        Equal(
+            new Size(form.LogicalToDeviceUnits(382), form.LogicalToDeviceUnits(333)),
+            form.ClientSize,
+            $"popup client size {state}");
+
+        var primaryMeter = form.Controls.OfType<UsageMeterControl>().First();
+        Equal(
+            new Rectangle(
+                form.LogicalToDeviceUnits(18),
+                form.LogicalToDeviceUnits(77),
+                form.LogicalToDeviceUnits(346),
+                form.LogicalToDeviceUnits(78)),
+            primaryMeter.Bounds,
+            $"popup meter bounds {state}");
+    }
+
+    private static int Scale(int value, int newDpi, int oldDpi)
+        => (int)Math.Round(value * (double)newDpi / oldDpi);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(
+        IntPtr windowHandle,
+        uint message,
+        IntPtr wParam,
+        ref NativeRectangle lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct NativeRectangle(int Left, int Top, int Right, int Bottom);
 
     private static void ParserReadsStandardUsage()
     {

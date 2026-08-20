@@ -8,7 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\CodexUsage.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.2.5</Version>
+    <Version>0.2.6</Version>
     <Product>Codex Usage</Product>
     <Description>Codex usage limits in the Windows system tray.</Description>
   </PropertyGroup>

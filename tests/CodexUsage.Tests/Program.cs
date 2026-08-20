@@ -276,6 +276,7 @@ internal static class Program
         Equal(25d, forecast.ConsumedPercentPerHour, "primary forecast rate since reset");
         Equal(windowStart.AddHours(4), forecast.DepletesAt, "primary forecast depletion time");
         Equal(true, forecast.ReachesZeroBeforeReset, "primary forecast before reset");
+        Equal(forecast.DepletesAt, forecast.ProjectionEndsAt, "depleting forecast ends at zero");
         Equal(TimeSpan.FromHours(1), forecast.TimeBeforeReset, "primary forecast lead time");
         Equal<UsageActivitySchedule?>(null, forecast.ActivitySchedule, "short history uses clock-time fallback");
     }
@@ -296,6 +297,8 @@ internal static class Program
         NotNull(safe, "safe depletion forecast");
         Equal(windowStart.AddHours(10), safe!.DepletesAt, "safe forecast depletion time");
         Equal(false, safe.ReachesZeroBeforeReset, "safe forecast after reset");
+        Equal(resetAt, safe.ProjectionEndsAt, "safe forecast projects through reset");
+        Equal(50d, safe.ProjectedAvailablePercentAt(safe.ProjectionEndsAt), "safe availability at reset");
         Equal<TimeSpan?>(null, safe.TimeBeforeReset, "safe forecast has no lead time");
         Equal<UsageDepletionForecast?>(null, flat, "flat usage has no forecast");
     }
@@ -533,7 +536,7 @@ internal static class Program
             var recordedAt = windowStart.AddHours(hour);
             if (hour > 0 && recordedAt.ToLocalTime().Hour is >= 7 and < 23)
             {
-                available -= 4;
+                available -= 0.05;
             }
 
             samples.Add(new UsageHistorySample(
@@ -569,6 +572,10 @@ internal static class Program
         Equal(true, chart.ShowOffHourSegments, "off-hour flats shown by default");
         Contains("pauses", subtitle.Text, "history subtitle explains off hours");
         var expandedForecastSpan = chart.DisplayedForecastSpan;
+        Equal(
+            true,
+            expandedForecastSpan > TimeSpan.FromDays(5),
+            "safe forecast remains visible through reset");
         toggle.Checked = false;
         Equal(false, chart.ShowOffHourSegments, "off-hour toggle hides flat segments");
         Equal(

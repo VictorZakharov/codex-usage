@@ -113,14 +113,13 @@ public sealed class UsageHistoryChart : Control
         _depletionForecasts = Enum.GetValues<UsageWindowKind>()
             .Select(window => UsageHistoryAnalysis.ForecastDepletion(_samples, window))
             .OfType<UsageDepletionForecast>()
-            .Where(forecast => forecast.ReachesZeroBeforeReset
-                && forecast.DepletesAt > now
+            .Where(forecast => forecast.ProjectionEndsAt > now
                 && forecast.ResetsAt > now)
-            .OrderBy(forecast => forecast.DepletesAt)
+            .OrderBy(forecast => forecast.ProjectionEndsAt)
             .ToArray();
         _forecastEnd = _depletionForecasts.Count == 0
             ? null
-            : _depletionForecasts.Max(forecast => forecast.DepletesAt);
+            : _depletionForecasts.Max(forecast => forecast.ProjectionEndsAt);
         _range = range;
         _palette = palette;
         BackColor = palette.Card;
@@ -266,7 +265,7 @@ public sealed class UsageHistoryChart : Control
                 legendFont,
                 textBrush,
                 x,
-                "Projected to 0%",
+                "Projected usage",
                 _palette.Danger,
                 dashed: true);
         }
@@ -421,13 +420,20 @@ public sealed class UsageHistoryChart : Control
         {
             var forecast = _depletionForecasts[index];
             DrawForecastSegments(graphics, forecast, timeline, linePen, offHourPen);
+            var projectionEnd = forecast.ProjectionEndsAt;
+            var projectedAvailable = forecast.ProjectedAvailablePercentAt(projectionEnd);
             var endpoint = new PointF(
-                MapX(forecast.DepletesAt, timeline),
-                MapY(0));
+                MapX(projectionEnd, timeline),
+                MapY(projectedAvailable));
             graphics.FillEllipse(endpointBrush, endpoint.X - 4, endpoint.Y - 4, 8, 8);
 
             var windowLabel = FormatForecastWindowLabel(forecast.Duration);
-            var label = $"{windowLabel} → 0%  {FormatForecastTime(forecast.DepletesAt)}";
+            var label = forecast.ReachesZeroBeforeReset
+                ? $"{windowLabel} → 0%  {FormatForecastTime(projectionEnd)}"
+                : $"{windowLabel} → {projectedAvailable:0.#}% at reset";
+            var hint = forecast.ReachesZeroBeforeReset
+                ? FormatResetLeadTime(forecast.TimeBeforeReset!.Value)
+                : FormatForecastTime(projectionEnd);
             var labelWidth = Math.Min(225, _plotRectangle.Width - 16);
             var labelLeft = Math.Max(_plotRectangle.Left + 8, _plotRectangle.Right - labelWidth - 8);
             var blockRectangle = new RectangleF(
@@ -448,7 +454,7 @@ public sealed class UsageHistoryChart : Control
             graphics.FillRectangle(labelBackground, blockRectangle);
             graphics.DrawString(label, labelFont, labelBrush, labelRectangle, labelFormat);
             graphics.DrawString(
-                FormatResetLeadTime(forecast.TimeBeforeReset!.Value),
+                hint,
                 hintFont,
                 hintBrush,
                 hintRectangle,
@@ -464,14 +470,15 @@ public sealed class UsageHistoryChart : Control
         Pen offHourPen)
     {
         var cursor = forecast.RecordedAt;
-        while (cursor < forecast.DepletesAt)
+        var projectionEnd = forecast.ProjectionEndsAt;
+        while (cursor < projectionEnd)
         {
             var schedule = forecast.ActivitySchedule;
             var isOffHour = schedule is not null && !schedule.IsActive(cursor);
-            var segmentEnd = schedule?.NextHourBoundary(cursor) ?? forecast.DepletesAt;
-            if (segmentEnd > forecast.DepletesAt)
+            var segmentEnd = schedule?.NextHourBoundary(cursor) ?? projectionEnd;
+            if (segmentEnd > projectionEnd)
             {
-                segmentEnd = forecast.DepletesAt;
+                segmentEnd = projectionEnd;
             }
 
             if (!isOffHour || _showOffHourSegments)
@@ -676,7 +683,7 @@ public sealed class UsageHistoryChart : Control
         var hasForecast = false;
         foreach (var forecast in _depletionForecasts)
         {
-            if (timestamp >= forecast.DepletesAt)
+            if (timestamp >= forecast.ProjectionEndsAt)
             {
                 continue;
             }
@@ -699,13 +706,14 @@ public sealed class UsageHistoryChart : Control
         var boundary = end;
         foreach (var forecast in _depletionForecasts)
         {
-            if (forecast.DepletesAt > timestamp && forecast.DepletesAt < boundary)
+            var projectionEnd = forecast.ProjectionEndsAt;
+            if (projectionEnd > timestamp && projectionEnd < boundary)
             {
-                boundary = forecast.DepletesAt;
+                boundary = projectionEnd;
             }
 
             if (forecast.ActivitySchedule is not { } schedule
-                || forecast.DepletesAt <= timestamp)
+                || projectionEnd <= timestamp)
             {
                 continue;
             }

@@ -48,65 +48,47 @@ internal static class PreviewRenderer
         if (args[0].Equals("--render-history", StringComparison.OrdinalIgnoreCase))
         {
             var historyNow = DateTimeOffset.Now;
-            var localDate = historyNow.Date;
-            var currentReset = AtLocalTime(localDate.AddHours(7));
-            if (currentReset > historyNow)
-            {
-                currentReset = AtLocalTime(localDate.AddDays(-1).AddHours(7));
-            }
-
-            var previousReset = AtLocalTime(currentReset.Date.AddDays(-1).AddHours(7));
-            var start = historyNow.AddHours(-66);
+            // Leave a small projected balance at the next reset so the preview covers
+            // the branch where a forecast ends at reset instead of reaching zero.
+            var currentReset = historyNow.AddMinutes(-76);
+            var windowStart = currentReset.AddDays(-7);
             var activitySchedule = new UsageActivitySchedule(
-                Enumerable.Range(7, 15),
+                Enumerable.Range(6, 17),
                 TimeZoneInfo.Local);
-            var sampleTimes = Enumerable.Range(0, 123)
-                .Select(index => start.AddTicks(
-                    ((historyNow - start).Ticks * index) / 122))
-                .Append(previousReset)
+            var sampleTimes = Enumerable.Range(0, 332)
+                .Select(index => windowStart.AddTicks(
+                    ((historyNow - windowStart).Ticks * index) / 331))
                 .Append(currentReset)
                 .Distinct()
                 .OrderBy(timestamp => timestamp)
                 .ToArray();
-            var availableBeforePreviousReset = activitySchedule
-                .GetActiveDuration(start, previousReset)
-                .TotalHours;
-            var availableBeforeCurrentReset = activitySchedule
-                .GetActiveDuration(previousReset, currentReset)
+            var activeBeforeCurrentReset = activitySchedule
+                .GetActiveDuration(windowStart, currentReset)
                 .TotalHours;
             var activeSinceCurrentReset = activitySchedule
                 .GetActiveDuration(currentReset, historyNow)
                 .TotalHours;
-            availableBeforePreviousReset = Math.Max(1d, availableBeforePreviousReset);
-            availableBeforeCurrentReset = Math.Max(1d, availableBeforeCurrentReset);
+            activeBeforeCurrentReset = Math.Max(1d, activeBeforeCurrentReset);
             activeSinceCurrentReset = Math.Max(1d, activeSinceCurrentReset);
             var samples = sampleTimes
                 .Select(recordedAt =>
                 {
                     double availablePercent;
                     DateTimeOffset resetsAt;
-                    if (recordedAt < previousReset)
+                    if (recordedAt < currentReset)
                     {
                         var activeHours = activitySchedule
-                            .GetActiveDuration(start, recordedAt)
+                            .GetActiveDuration(windowStart, recordedAt)
                             .TotalHours;
-                        availablePercent = 99d - (29d * activeHours / availableBeforePreviousReset);
-                        resetsAt = previousReset;
-                    }
-                    else if (recordedAt < currentReset)
-                    {
-                        var activeHours = activitySchedule
-                            .GetActiveDuration(previousReset, recordedAt)
-                            .TotalHours;
-                        availablePercent = 100d - (12d * activeHours / availableBeforeCurrentReset);
-                        resetsAt = previousReset.AddDays(7);
+                        availablePercent = 100d - (95d * activeHours / activeBeforeCurrentReset);
+                        resetsAt = currentReset;
                     }
                     else
                     {
                         var activeHours = activitySchedule
                             .GetActiveDuration(currentReset, recordedAt)
                             .TotalHours;
-                        availablePercent = 100d - (16d * activeHours / activeSinceCurrentReset);
+                        availablePercent = 100d - (1d * activeHours / activeSinceCurrentReset);
                         resetsAt = currentReset.AddDays(7);
                     }
 
@@ -202,7 +184,4 @@ internal static class PreviewRenderer
         availablePercent = null;
         return false;
     }
-
-    private static DateTimeOffset AtLocalTime(DateTime timestamp)
-        => new(timestamp, TimeZoneInfo.Local.GetUtcOffset(timestamp));
 }

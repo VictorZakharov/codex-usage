@@ -174,6 +174,9 @@ public sealed record UsageDepletionForecast(
 {
     public bool ReachesZeroBeforeReset => DepletesAt <= ResetsAt;
 
+    public DateTimeOffset ProjectionEndsAt
+        => ReachesZeroBeforeReset ? DepletesAt : ResetsAt;
+
     public TimeSpan? TimeBeforeReset
         => ReachesZeroBeforeReset ? ResetsAt - DepletesAt : null;
 

@@ -7,6 +7,12 @@ namespace CodexUsage.App.UI;
 
 public sealed class HistoryForm : Form
 {
+    private const int LogicalDpi = 96;
+    private const int LogicalClientWidth = 860;
+    private const int LogicalClientHeight = 540;
+    private const int LogicalMinimumWidth = 640;
+    private const int LogicalMinimumHeight = 400;
+
     private readonly Label _titleLabel = new();
     private readonly Label _subtitleLabel = new();
     private readonly Label _rangeLabel = new();
@@ -36,6 +42,7 @@ public sealed class HistoryForm : Form
     private CancellationTokenSource? _tokenUsageCancellation;
     private DateTimeOffset _lastTokenRefresh;
     private TimeSpan? _lastTokenRange;
+    private bool _initialLogicalSizeApplied;
 
     public HistoryForm(AppSettings settings)
         : this(settings, new CodexTokenUsageReader().Read)
@@ -55,9 +62,10 @@ public sealed class HistoryForm : Form
         _palette = ThemePalette.Resolve(settings.Theme);
         _selectedRange = _rangeOptions[1];
         Text = "Codex usage history";
+        AutoScaleDimensions = new SizeF(LogicalDpi, LogicalDpi);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(860, 540);
-        MinimumSize = new Size(640, 400);
+        ClientSize = new Size(LogicalClientWidth, LogicalClientHeight);
+        MinimumSize = new Size(LogicalMinimumWidth, LogicalMinimumHeight);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f, FontStyle.Regular);
 
@@ -124,6 +132,38 @@ public sealed class HistoryForm : Form
         Resize += (_, _) => LayoutContent();
         ApplyTheme(settings.Theme);
         LayoutContent();
+    }
+
+    protected override void OnHandleCreated(EventArgs eventArgs)
+    {
+        base.OnHandleCreated(eventArgs);
+        if (_initialLogicalSizeApplied)
+        {
+            return;
+        }
+
+        // Constructor sizes are physical pixels until the form has a monitor DPI.
+        // Apply the logical default once, while preserving later user resizing.
+        _initialLogicalSizeApplied = true;
+        ClientSize = new Size(
+            LogicalToDeviceUnits(LogicalClientWidth),
+            LogicalToDeviceUnits(LogicalClientHeight));
+        UpdateMinimumSize();
+        LayoutContent();
+    }
+
+    protected override void OnShown(EventArgs eventArgs)
+    {
+        base.OnShown(eventArgs);
+        LayoutContent();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs eventArgs)
+    {
+        base.OnDpiChanged(eventArgs);
+        UpdateMinimumSize();
+        LayoutContent();
+        Invalidate(invalidateChildren: true);
     }
 
     public void UpdateHistory(IReadOnlyList<UsageHistorySample> samples)
@@ -213,16 +253,59 @@ public sealed class HistoryForm : Form
 
     private void LayoutContent()
     {
-        const int margin = 24;
-        _titleLabel.SetBounds(margin, 16, Math.Max(200, ClientSize.Width - 330), 34);
-        _subtitleLabel.SetBounds(margin, 51, Math.Max(240, ClientSize.Width - 235), 24);
-        _offHoursCheckBox.SetBounds(ClientSize.Width - 196, 50, 172, 26);
-        _rangeLabel.SetBounds(ClientSize.Width - 230, 20, 54, 28);
-        _rangeButton.SetBounds(ClientSize.Width - 168, 18, 144, 30);
-        _chart.SetBounds(margin, 84, Math.Max(100, ClientSize.Width - (margin * 2)), Math.Max(180, ClientSize.Height - 158));
-        _tokenSummaryLabel.SetBounds(margin, ClientSize.Height - 66, Math.Max(100, ClientSize.Width - 164), 24);
-        _tokenProgress.SetBounds(ClientSize.Width - 116, ClientSize.Height - 61, 92, 12);
-        _statusLabel.SetBounds(margin, ClientSize.Height - 38, Math.Max(100, ClientSize.Width - (margin * 2)), 26);
+        var margin = LogicalToDeviceUnits(24);
+        _titleLabel.SetBounds(
+            margin,
+            LogicalToDeviceUnits(16),
+            Math.Max(LogicalToDeviceUnits(200), ClientSize.Width - LogicalToDeviceUnits(330)),
+            LogicalToDeviceUnits(34));
+        _subtitleLabel.SetBounds(
+            margin,
+            LogicalToDeviceUnits(51),
+            Math.Max(LogicalToDeviceUnits(240), ClientSize.Width - LogicalToDeviceUnits(235)),
+            LogicalToDeviceUnits(24));
+        _offHoursCheckBox.SetBounds(
+            ClientSize.Width - LogicalToDeviceUnits(196),
+            LogicalToDeviceUnits(50),
+            LogicalToDeviceUnits(172),
+            LogicalToDeviceUnits(26));
+        _rangeLabel.SetBounds(
+            ClientSize.Width - LogicalToDeviceUnits(230),
+            LogicalToDeviceUnits(20),
+            LogicalToDeviceUnits(54),
+            LogicalToDeviceUnits(28));
+        _rangeButton.SetBounds(
+            ClientSize.Width - LogicalToDeviceUnits(168),
+            LogicalToDeviceUnits(18),
+            LogicalToDeviceUnits(144),
+            LogicalToDeviceUnits(30));
+        _chart.SetBounds(
+            margin,
+            LogicalToDeviceUnits(84),
+            Math.Max(LogicalToDeviceUnits(100), ClientSize.Width - (margin * 2)),
+            Math.Max(LogicalToDeviceUnits(180), ClientSize.Height - LogicalToDeviceUnits(158)));
+        _tokenSummaryLabel.SetBounds(
+            margin,
+            ClientSize.Height - LogicalToDeviceUnits(66),
+            Math.Max(LogicalToDeviceUnits(100), ClientSize.Width - LogicalToDeviceUnits(164)),
+            LogicalToDeviceUnits(24));
+        _tokenProgress.SetBounds(
+            ClientSize.Width - LogicalToDeviceUnits(116),
+            ClientSize.Height - LogicalToDeviceUnits(61),
+            LogicalToDeviceUnits(92),
+            LogicalToDeviceUnits(12));
+        _statusLabel.SetBounds(
+            margin,
+            ClientSize.Height - LogicalToDeviceUnits(38),
+            Math.Max(LogicalToDeviceUnits(100), ClientSize.Width - (margin * 2)),
+            LogicalToDeviceUnits(26));
+    }
+
+    private void UpdateMinimumSize()
+    {
+        MinimumSize = new Size(
+            LogicalToDeviceUnits(LogicalMinimumWidth),
+            LogicalToDeviceUnits(LogicalMinimumHeight));
     }
 
     private void QueueTokenSummaryRefresh(bool force)

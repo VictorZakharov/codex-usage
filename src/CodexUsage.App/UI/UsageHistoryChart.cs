@@ -8,6 +8,8 @@ namespace CodexUsage.App.UI;
 
 public sealed class UsageHistoryChart : Control
 {
+    private const float LogicalDpi = 96f;
+
     private readonly ToolTip _toolTip = new()
     {
         InitialDelay = 250,
@@ -165,7 +167,9 @@ public sealed class UsageHistoryChart : Control
         _toolTip.Show(
             BuildToolTip(hoveredPoint),
             this,
-            Point.Round(new PointF(hoveredPoint.Location.X + 10, hoveredPoint.Location.Y + 10)),
+            Point.Round(new PointF(
+                hoveredPoint.Location.X + ScaleLogical(10),
+                hoveredPoint.Location.Y + ScaleLogical(10))),
             12_000);
         Invalidate();
     }
@@ -178,16 +182,20 @@ public sealed class UsageHistoryChart : Control
         graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         graphics.Clear(_palette.Card);
 
-        using var borderPen = new Pen(_palette.Border);
+        using var borderPen = new Pen(_palette.Border, Math.Max(1f, ScaleLogical(1)));
         graphics.DrawRectangle(borderPen, 0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
 
-        if (Width < 260 || Height < 180)
+        if (Width < ScaleLogical(260) || Height < ScaleLogical(180))
         {
             return;
         }
 
-        var legendHeight = OffHoursDescription is null ? 52 : 70;
-        _plotRectangle = new RectangleF(54, legendHeight, Width - 76, Height - legendHeight - 44);
+        var legendHeight = ScaleLogical(OffHoursDescription is null ? 52 : 70);
+        _plotRectangle = new RectangleF(
+            ScaleLogical(54),
+            legendHeight,
+            Width - ScaleLogical(76),
+            Height - legendHeight - ScaleLogical(44));
         var timeline = VisibleInterval();
         ConfigureForecastRectangle(timeline);
         DrawForecastBackground(graphics);
@@ -240,7 +248,7 @@ public sealed class UsageHistoryChart : Control
         var primaryLabel = FormatWindowLegendLabel(latest?.PrimaryDuration, "Primary");
         var secondaryLabel = FormatWindowLegendLabel(latest?.SecondaryDuration, "Secondary");
 
-        var x = 18f;
+        var x = ScaleLogical(18);
         if (_samples.Any(sample => sample.PrimaryAvailablePercent is not null))
         {
             x = DrawLineLegend(graphics, legendFont, textBrush, x, primaryLabel, primaryColor);
@@ -253,9 +261,18 @@ public sealed class UsageHistoryChart : Control
 
         if (_restoreEvents.Count > 0)
         {
-            DrawUpwardTriangle(graphics, _palette.Success, new PointF(x + 5, 24), 5f);
-            graphics.DrawString("Reset", legendFont, textBrush, x + 16, 15);
-            x += 16 + graphics.MeasureString("Reset", legendFont).Width + 20;
+            DrawUpwardTriangle(
+                graphics,
+                _palette.Success,
+                new PointF(x + ScaleLogical(5), ScaleLogical(24)),
+                ScaleLogical(5));
+            graphics.DrawString(
+                "Reset",
+                legendFont,
+                textBrush,
+                x + ScaleLogical(16),
+                ScaleLogical(15));
+            x += ScaleLogical(16) + graphics.MeasureString("Reset", legendFont).Width + ScaleLogical(20);
         }
 
         if (_depletionForecasts.Count > 0)
@@ -274,7 +291,12 @@ public sealed class UsageHistoryChart : Control
         {
             if (_showOffHourSegments)
             {
-                DrawLegendLine(graphics, _palette.Danger, 18, 43, dashed: true);
+                DrawLegendLine(
+                    graphics,
+                    _palette.Danger,
+                    ScaleLogical(18),
+                    ScaleLogical(43),
+                    dashed: true);
             }
 
             graphics.DrawString(
@@ -283,8 +305,8 @@ public sealed class UsageHistoryChart : Control
                     : $"Assumed off hours collapsed: {offHours}",
                 legendFont,
                 textBrush,
-                _showOffHourSegments ? 38 : 18,
-                34);
+                ScaleLogical(_showOffHourSegments ? 38 : 18),
+                ScaleLogical(34));
         }
     }
 
@@ -292,7 +314,9 @@ public sealed class UsageHistoryChart : Control
     {
         using var axisFont = new Font(Font.FontFamily, 8f, FontStyle.Regular);
         using var labelBrush = new SolidBrush(_palette.MutedText);
-        using var gridPen = new Pen(Color.FromArgb(_palette.IsDark ? 72 : 52, _palette.Border));
+        using var gridPen = new Pen(
+            Color.FromArgb(_palette.IsDark ? 72 : 52, _palette.Border),
+            Math.Max(1f, ScaleLogical(1)));
 
         foreach (var value in new[] { 100, 75, 50, 25, 0 })
         {
@@ -300,7 +324,12 @@ public sealed class UsageHistoryChart : Control
             graphics.DrawLine(gridPen, _plotRectangle.Left, y, _plotRectangle.Right, y);
             var label = $"{value}%";
             var size = graphics.MeasureString(label, axisFont);
-            graphics.DrawString(label, axisFont, labelBrush, _plotRectangle.Left - size.Width - 8, y - (size.Height / 2));
+            graphics.DrawString(
+                label,
+                axisFont,
+                labelBrush,
+                _plotRectangle.Left - size.Width - ScaleLogical(8),
+                y - (size.Height / 2));
         }
 
         const int tickCount = 6;
@@ -309,7 +338,7 @@ public sealed class UsageHistoryChart : Control
         {
             var fraction = index / (double)(tickCount - 1);
             var x = _plotRectangle.Left + ((float)fraction * _plotRectangle.Width);
-            if (_forecastEnd is not null && Math.Abs(x - nowX) < 36)
+            if (_forecastEnd is not null && Math.Abs(x - nowX) < ScaleLogical(36))
             {
                 continue;
             }
@@ -324,7 +353,12 @@ public sealed class UsageHistoryChart : Control
                 x - (size.Width / 2),
                 _plotRectangle.Left,
                 _plotRectangle.Right - size.Width);
-            graphics.DrawString(label, axisFont, labelBrush, labelX, _plotRectangle.Bottom + 8);
+            graphics.DrawString(
+                label,
+                axisFont,
+                labelBrush,
+                labelX,
+                _plotRectangle.Bottom + ScaleLogical(8));
         }
 
         if (_forecastEnd is not null)
@@ -340,7 +374,7 @@ public sealed class UsageHistoryChart : Control
                 axisFont,
                 labelBrush,
                 labelX,
-                _plotRectangle.Bottom + 8);
+                _plotRectangle.Bottom + ScaleLogical(8));
         }
     }
 
@@ -371,7 +405,9 @@ public sealed class UsageHistoryChart : Control
             _palette.IsDark ? 18 : 10,
             _palette.Danger));
         graphics.FillRectangle(backgroundBrush, _forecastRectangle);
-        using var dividerPen = new Pen(Color.FromArgb(150, _palette.MutedText))
+        using var dividerPen = new Pen(
+            Color.FromArgb(150, _palette.MutedText),
+            Math.Max(1f, ScaleLogical(1)))
         {
             DashStyle = DashStyle.Dot,
         };
@@ -392,13 +428,13 @@ public sealed class UsageHistoryChart : Control
             return;
         }
 
-        using var linePen = new Pen(_palette.Danger, 2.25f)
+        using var linePen = new Pen(_palette.Danger, ScaleLogical(2.25f))
         {
             DashStyle = DashStyle.Dash,
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
         };
-        using var offHourPen = new Pen(Color.FromArgb(190, _palette.Danger), 2f)
+        using var offHourPen = new Pen(Color.FromArgb(190, _palette.Danger), ScaleLogical(2))
         {
             DashStyle = DashStyle.Dot,
             StartCap = LineCap.Round,
@@ -425,7 +461,13 @@ public sealed class UsageHistoryChart : Control
             var endpoint = new PointF(
                 MapX(projectionEnd, timeline),
                 MapY(projectedAvailable));
-            graphics.FillEllipse(endpointBrush, endpoint.X - 4, endpoint.Y - 4, 8, 8);
+            var endpointRadius = ScaleLogical(4);
+            graphics.FillEllipse(
+                endpointBrush,
+                endpoint.X - endpointRadius,
+                endpoint.Y - endpointRadius,
+                endpointRadius * 2,
+                endpointRadius * 2);
 
             var windowLabel = FormatForecastWindowLabel(forecast.Duration);
             var label = forecast.ReachesZeroBeforeReset
@@ -434,23 +476,25 @@ public sealed class UsageHistoryChart : Control
             var hint = forecast.ReachesZeroBeforeReset
                 ? FormatResetLeadTime(forecast.TimeBeforeReset!.Value)
                 : FormatForecastTime(projectionEnd);
-            var labelWidth = Math.Min(225, _plotRectangle.Width - 16);
-            var labelLeft = Math.Max(_plotRectangle.Left + 8, _plotRectangle.Right - labelWidth - 8);
+            var labelWidth = Math.Min(ScaleLogical(225), _plotRectangle.Width - ScaleLogical(16));
+            var labelLeft = Math.Max(
+                _plotRectangle.Left + ScaleLogical(8),
+                _plotRectangle.Right - labelWidth - ScaleLogical(8));
             var blockRectangle = new RectangleF(
                 labelLeft,
-                _forecastRectangle.Top + 7 + (index * 39),
+                _forecastRectangle.Top + ScaleLogical(7 + (index * 39)),
                 labelWidth,
-                36);
+                ScaleLogical(36));
             var labelRectangle = new RectangleF(
                 blockRectangle.Left,
-                blockRectangle.Top + 1,
+                blockRectangle.Top + ScaleLogical(1),
                 blockRectangle.Width,
-                17);
+                ScaleLogical(17));
             var hintRectangle = new RectangleF(
                 blockRectangle.Left,
-                blockRectangle.Top + 18,
+                blockRectangle.Top + ScaleLogical(18),
                 blockRectangle.Width,
-                16);
+                ScaleLogical(16));
             graphics.FillRectangle(labelBackground, blockRectangle);
             graphics.DrawString(label, labelFont, labelBrush, labelRectangle, labelFormat);
             graphics.DrawString(
@@ -503,7 +547,7 @@ public sealed class UsageHistoryChart : Control
         Color color,
         TimelineInterval timeline)
     {
-        using var pen = new Pen(color, 2.25f)
+        using var pen = new Pen(color, ScaleLogical(2.25f))
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
@@ -511,7 +555,7 @@ public sealed class UsageHistoryChart : Control
         };
         using var pointBrush = new SolidBrush(color);
         var segment = new List<PointF>();
-        var showSamplePoints = samples.Count <= _plotRectangle.Width / 6f;
+        var showSamplePoints = samples.Count <= _plotRectangle.Width / ScaleLogical(6);
 
         foreach (var sample in samples)
         {
@@ -545,7 +589,7 @@ public sealed class UsageHistoryChart : Control
             var point = new PointF(
                 MapX(restore.RecordedAt, timeline),
                 MapY(restore.AvailablePercent));
-            DrawUpwardTriangle(graphics, _palette.Success, point, 5.5f);
+            DrawUpwardTriangle(graphics, _palette.Success, point, ScaleLogical(5.5f));
         }
     }
 
@@ -832,7 +876,7 @@ public sealed class UsageHistoryChart : Control
 
     private HoverPoint? HitTestPoint(Point location, TimelineInterval timeline)
     {
-        const float hitRadius = 9f;
+        var hitRadius = ScaleLogical(9);
         var position = Math.Clamp(
             (location.X - _plotRectangle.Left) / _plotRectangle.Width,
             0f,
@@ -953,10 +997,29 @@ public sealed class UsageHistoryChart : Control
             MapY(_hoveredPoint.AvailablePercent));
         using var haloBrush = new SolidBrush(_palette.Card);
         using var pointBrush = new SolidBrush(color);
-        using var outlinePen = new Pen(Color.FromArgb(220, _palette.Text), 1f);
-        graphics.FillEllipse(haloBrush, point.X - 5, point.Y - 5, 10, 10);
-        graphics.FillEllipse(pointBrush, point.X - 3.5f, point.Y - 3.5f, 7, 7);
-        graphics.DrawEllipse(outlinePen, point.X - 3.5f, point.Y - 3.5f, 7, 7);
+        using var outlinePen = new Pen(
+            Color.FromArgb(220, _palette.Text),
+            Math.Max(1f, ScaleLogical(1)));
+        var haloRadius = ScaleLogical(5);
+        var pointRadius = ScaleLogical(3.5f);
+        graphics.FillEllipse(
+            haloBrush,
+            point.X - haloRadius,
+            point.Y - haloRadius,
+            haloRadius * 2,
+            haloRadius * 2);
+        graphics.FillEllipse(
+            pointBrush,
+            point.X - pointRadius,
+            point.Y - pointRadius,
+            pointRadius * 2,
+            pointRadius * 2);
+        graphics.DrawEllipse(
+            outlinePen,
+            point.X - pointRadius,
+            point.Y - pointRadius,
+            pointRadius * 2,
+            pointRadius * 2);
     }
 
     private void ClearHover()
@@ -971,7 +1034,7 @@ public sealed class UsageHistoryChart : Control
         Invalidate();
     }
 
-    private static void DrawSegment(
+    private void DrawSegment(
         Graphics graphics,
         Pen pen,
         Brush pointBrush,
@@ -985,20 +1048,32 @@ public sealed class UsageHistoryChart : Control
 
         if (showSamplePoints)
         {
+            var sampleRadius = ScaleLogical(1.6f);
             foreach (var point in points)
             {
-                graphics.FillEllipse(pointBrush, point.X - 1.6f, point.Y - 1.6f, 3.2f, 3.2f);
+                graphics.FillEllipse(
+                    pointBrush,
+                    point.X - sampleRadius,
+                    point.Y - sampleRadius,
+                    sampleRadius * 2,
+                    sampleRadius * 2);
             }
         }
 
         if (points.Count > 0)
         {
             var point = points[^1];
-            graphics.FillEllipse(pointBrush, point.X - 3, point.Y - 3, 6, 6);
+            var endpointRadius = ScaleLogical(3);
+            graphics.FillEllipse(
+                pointBrush,
+                point.X - endpointRadius,
+                point.Y - endpointRadius,
+                endpointRadius * 2,
+                endpointRadius * 2);
         }
     }
 
-    private static float DrawLineLegend(
+    private float DrawLineLegend(
         Graphics graphics,
         Font font,
         Brush textBrush,
@@ -1007,23 +1082,28 @@ public sealed class UsageHistoryChart : Control
         Color color,
         bool dashed = false)
     {
-        DrawLegendLine(graphics, color, x, 24, dashed);
-        graphics.DrawString(text, font, textBrush, x + 20, 15);
-        return x + 20 + graphics.MeasureString(text, font).Width + 20;
+        DrawLegendLine(graphics, color, x, ScaleLogical(24), dashed);
+        graphics.DrawString(
+            text,
+            font,
+            textBrush,
+            x + ScaleLogical(20),
+            ScaleLogical(15));
+        return x + ScaleLogical(20) + graphics.MeasureString(text, font).Width + ScaleLogical(20);
     }
 
-    private static void DrawLegendLine(Graphics graphics, Color color, float x, float y, bool dashed)
+    private void DrawLegendLine(Graphics graphics, Color color, float x, float y, bool dashed)
     {
-        using var pen = new Pen(color, 2.25f)
+        using var pen = new Pen(color, ScaleLogical(2.25f))
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
             DashStyle = dashed ? DashStyle.Dash : DashStyle.Solid,
         };
-        graphics.DrawLine(pen, x, y, x + 13, y);
+        graphics.DrawLine(pen, x, y, x + ScaleLogical(13), y);
     }
 
-    private static void DrawUpwardTriangle(Graphics graphics, Color color, PointF center, float radius)
+    private void DrawUpwardTriangle(Graphics graphics, Color color, PointF center, float radius)
     {
         var points = new[]
         {
@@ -1032,10 +1112,15 @@ public sealed class UsageHistoryChart : Control
             new PointF(center.X + radius, center.Y + radius),
         };
         using var brush = new SolidBrush(color);
-        using var border = new Pen(Color.FromArgb(210, 255, 255, 255), 1f);
+        using var border = new Pen(
+            Color.FromArgb(210, 255, 255, 255),
+            Math.Max(1f, ScaleLogical(1)));
         graphics.FillPolygon(brush, points);
         graphics.DrawPolygon(border, points);
     }
+
+    private float ScaleLogical(float value)
+        => value * DeviceDpi / LogicalDpi;
 
     private sealed record HoverPoint(
         UsageHistorySample Sample,

@@ -40,6 +40,7 @@ internal static class Program
             HistoryStoreUpgradesLegacySamplesWithDuration();
             TokenUsageReaderAggregatesPeriodResetAndToday();
             PopupLayoutSurvivesDpiChange();
+            HistoryLayoutSurvivesDpiChange();
 
             if (args.Contains("--live", StringComparer.OrdinalIgnoreCase))
             {
@@ -73,6 +74,63 @@ internal static class Program
         AssertPopupLayout(form, originalDpi, "after DPI restore");
     }
 
+    private static void HistoryLayoutSurvivesDpiChange()
+    {
+        using var form = new HistoryForm(
+            new AppSettings { Theme = ThemeMode.Dark },
+            (_, _, _, _) => new CodexTokenUsageSummary(0, null, 0, 0));
+        _ = form.Handle;
+
+        var now = DateTimeOffset.Now;
+        var resetsAt = now.AddDays(5);
+        form.UpdateHistory(
+        [
+            new UsageHistorySample(
+                now.AddDays(-2),
+                100,
+                null,
+                resetsAt,
+                null,
+                TimeSpan.FromDays(7),
+                null),
+            new UsageHistorySample(
+                now,
+                70,
+                null,
+                resetsAt,
+                null,
+                TimeSpan.FromDays(7),
+                null),
+        ]);
+
+        var originalDpi = form.DeviceDpi;
+        var changedDpi = originalDpi == 144 ? 192 : 144;
+
+        Equal(
+            new Size(
+                form.LogicalToDeviceUnits(860),
+                form.LogicalToDeviceUnits(540)),
+            form.ClientSize,
+            "history initial client size");
+        AssertHistoryLayout(form, originalDpi, "at initial DPI");
+        AssertHistoryChartRenders(form, "at initial DPI");
+
+        ChangeDpi(form, changedDpi);
+        AssertHistoryLayout(form, changedDpi, "after DPI change");
+        AssertHistoryChartRenders(form, "after DPI change");
+
+        form.Size = form.MinimumSize;
+        AssertHistoryLayout(form, changedDpi, "at minimum size after DPI change");
+        AssertHistoryChartRenders(form, "at minimum size after DPI change");
+        var expectedRestoredSize = new Size(
+            Scale(form.Width, originalDpi, changedDpi),
+            Scale(form.Height, originalDpi, changedDpi));
+        ChangeDpi(form, originalDpi);
+        Equal(expectedRestoredSize, form.Size, "history size after minimum-size DPI restore");
+        AssertHistoryLayout(form, originalDpi, "after DPI restore");
+        AssertHistoryChartRenders(form, "after DPI restore");
+    }
+
     private static void ChangeDpi(Form form, int newDpi)
     {
         var oldDpi = form.DeviceDpi;
@@ -104,6 +162,67 @@ internal static class Program
                 form.LogicalToDeviceUnits(78)),
             primaryMeter.Bounds,
             $"popup meter bounds {state}");
+    }
+
+    private static void AssertHistoryLayout(HistoryForm form, int expectedDpi, string state)
+    {
+        Equal(expectedDpi, form.DeviceDpi, $"history device DPI {state}");
+        Equal(
+            new Size(
+                form.LogicalToDeviceUnits(640),
+                form.LogicalToDeviceUnits(400)),
+            form.MinimumSize,
+            $"history minimum size {state}");
+
+        var chart = form.Controls.OfType<UsageHistoryChart>().Single();
+        var margin = form.LogicalToDeviceUnits(24);
+        Equal(
+            new Rectangle(
+                margin,
+                form.LogicalToDeviceUnits(84),
+                Math.Max(form.LogicalToDeviceUnits(100), form.ClientSize.Width - (margin * 2)),
+                Math.Max(
+                    form.LogicalToDeviceUnits(180),
+                    form.ClientSize.Height - form.LogicalToDeviceUnits(158))),
+            chart.Bounds,
+            $"history chart bounds {state}");
+
+        var titleLabel = form.Controls
+            .OfType<Label>()
+            .Single(label => label.Text == "Usage history");
+        Equal(
+            new Rectangle(
+                margin,
+                form.LogicalToDeviceUnits(16),
+                Math.Max(
+                    form.LogicalToDeviceUnits(200),
+                    form.ClientSize.Width - form.LogicalToDeviceUnits(330)),
+                form.LogicalToDeviceUnits(34)),
+            titleLabel.Bounds,
+            $"history title bounds {state}");
+    }
+
+    private static void AssertHistoryChartRenders(HistoryForm form, string state)
+    {
+        var chart = form.Controls.OfType<UsageHistoryChart>().Single();
+        using var bitmap = new Bitmap(chart.Width, chart.Height);
+        chart.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+
+        var accent = ThemePalette.Resolve(ThemeMode.Dark).Accent.ToArgb();
+        var hasSeriesPixel = false;
+        for (var y = 0; y < bitmap.Height && !hasSeriesPixel; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                if (bitmap.GetPixel(x, y).ToArgb() == accent)
+                {
+                    hasSeriesPixel = true;
+                    break;
+                }
+            }
+        }
+
+        Equal(true, hasSeriesPixel, $"history chart series rendered {state}");
     }
 
     private static int Scale(int value, int newDpi, int oldDpi)
